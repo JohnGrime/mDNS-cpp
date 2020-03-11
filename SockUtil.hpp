@@ -47,15 +47,6 @@ struct SockUtil
 		return (s->ss_family == AF_INET) || (s->ss_family == AF_INET6);
 	}
 
-	static sa_family_t get_family(int sd)
-	{
-		ss s;
-		socklen_t l = sizeof(s);
-
-		if (getsockname(sd, (sockaddr *)&s, &l)==-1) ERROR("getsockname()");
-		return s.ss_family;
-	}
-
 	// Extract IPv4/6 address from general sockaddr
 	template <typename T> static ia4* inet4(T *s) { return (is_inet(s)) ? &((sa4 *)s)->sin_addr : nullptr; }
 	template <typename T> static ia6* inet6(T *s) { return (is_inet(s)) ? &((sa6 *)s)->sin6_addr : nullptr; }
@@ -68,7 +59,7 @@ struct SockUtil
 		return (it==family_map.end()) ? ("UNKNOWN") : (it->second.c_str());
 	}
 
-	// MAC address; for AF_PACKET
+	// MAC address (AF_PACKET family type)
 	template <typename T> static const char* mac_str(T *s, char *buf, size_t len)
 	{
 		if (!s || ((ss *)s)->ss_family != AF_PACKET) return nullptr;

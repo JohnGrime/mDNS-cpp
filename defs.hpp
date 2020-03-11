@@ -20,15 +20,17 @@
 #include <map>
 #include <string>
 
+//
+// Some fundamental bits and pieces that are uses throughout
+//
+
 namespace mDNS
 {
 
-// Map something to its name (as a string)
+// Map something of type T to a string name
 template <typename T> using NameMap = std::map<T,std::string>;
 
-//
 // Warning/error logging (possibly to multiple output streams)
-//
 struct Log
 {
 	static void notify_(FILE *f,
@@ -67,6 +69,7 @@ struct Log
 
 }
 
+// Utility macros that insert current file/function/line into Notify() call
 #define WARN(...)  { mDNS::Log::Notify( __FILE__, __func__, __LINE__, false, __VA_ARGS__ ); }
 #define ERROR(...) { mDNS::Log::Notify( __FILE__, __func__, __LINE__,  true, __VA_ARGS__ ); }
 

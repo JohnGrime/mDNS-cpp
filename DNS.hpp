@@ -163,14 +163,9 @@ struct Util
 	template <typename T>
 	static T hton(const T& t)
 	{
-		constexpr auto _16 = sizeof(uint16_t);
-		constexpr auto _32 = sizeof(uint32_t);
-		constexpr auto _64 = sizeof(uint64_t);
-
-		if (sizeof(T) == _16) return htons(t);
-		if (sizeof(T) == _32) return htonl(t);
-		if (sizeof(T) == _64) return htonll(t);
-		
+		if (sizeof(T) == sizeof(uint16_t)) return htons(t);
+		if (sizeof(T) == sizeof(uint32_t)) return htonl(t);
+		if (sizeof(T) == sizeof(uint64_t)) return htonll(t);
 		return t;
 	}
 
@@ -180,6 +175,16 @@ struct Util
 	template<typename T>
 	static size_t parse_atom(const char *bytes, size_t i, size_t max_i, T& t, bool endian = false)
 	{
+		if (!bytes) {
+			WARN("Null bytes pointer!");
+			return 0;
+		}
+
+		if (i>=max_i) {
+			WARN("Attempt to read past buffer (%d,%d)", (int)i, (int)max_i);
+			return 0;
+		}
+
 		if (!bytes || (i>=max_i)) return 0;
 
 		t = *((T*) &bytes[i]);
@@ -214,7 +219,6 @@ struct Util
 				return 0;
 			}
 
-			auto old_i = i;
 			uint8_t compression = bytes[i] & ptr_bits;
 
 			if (compression && !allow_compression) {
@@ -248,6 +252,7 @@ struct Util
 				uint16_t new_i;
 
 				// Get new offset into packet data
+				auto old_i = i;
 				i = parse_atom(bytes, i, max_i, new_i);
 				new_i = ntoh(new_i) & idx_bits;
 
@@ -276,23 +281,18 @@ struct Util
 	}
 };
 
+//
+// Lightweight wrapper around the source buffer.
+//
 struct ResourceRecord
 {
-	struct DeserializeHelper
-	{
-		using Callback = std::function<int (ResourceRecord*)>;
-
-		std::vector<std::string> tmp;
-		std::map<uint16_t,Callback> callbacks;
-	};
-
 	struct Header
 	{
 		std::string name;
 		uint16_t type = 0;
 		uint16_t clss = 0;
 
-		size_t deserialize(const char* bytes, size_t i, size_t max_i, DeserializeHelper& h)
+		size_t deserialize(const char* bytes, size_t i, size_t max_i, std::vector<std::string>& tmp)
 		{
 			if (!bytes) {
 				WARN("Null bytes pointer!");
@@ -300,14 +300,14 @@ struct ResourceRecord
 			}
 
 			// RR header: allow compression, require terminal zero-string
-			i = Util::parse_labels(bytes, i, max_i, true, true, h.tmp);
+			i = Util::parse_labels(bytes, i, max_i, true, true, tmp);
 			if (i==0) {
 				return 0;
 			}
 			
 			name = "";
-			for (size_t ti=0, N=h.tmp.size(); ti<N; ti++ ) {
-				name += h.tmp[ti] + ".";
+			for (size_t ti=0, N=tmp.size(); ti<N; ti++ ) {
+				name += tmp[ti] + ".";
 			}
 
 			i = Util::parse_atom(bytes, i, max_i, type, true);
@@ -325,7 +325,7 @@ struct ResourceRecord
 
 		void print_() const
 		{
-			printf("{name=%s, type=%s (%d), class=%d}", name.c_str(), Defs::RRType(type), type, clss);
+			printf("{name=%s, type=%s (%d), class=%s (%d)}", name.c_str(), Defs::RRType(type), type, Defs::Class(clss), clss);
 		}
 	};
 
@@ -333,18 +333,18 @@ struct ResourceRecord
 
 	uint32_t TTL = 0;
 
-	// Raw data for the payload; offset is into ENTIRE packet data buffer
+	// Raw data for the record; offset is into ENTIRE packet data buffer
 	uint16_t rd_ofs = 0;
 	uint16_t rd_len = 0;
 
-	size_t deserialize(const char* bytes, size_t i, size_t max_i, DeserializeHelper& h)
+	size_t deserialize(const char* bytes, size_t i, size_t max_i, std::vector<std::string>& tmp)
 	{
 		if (!bytes) {
 			WARN("Null bytes pointer!");
 			return 0;
 		}
 
-		i = header.deserialize(bytes, i, max_i, h);
+		i = header.deserialize(bytes, i, max_i, tmp);
 		if (i==0) {
 			return 0;
 		}
@@ -368,14 +368,6 @@ struct ResourceRecord
 			return 0;
 		}
 
-		const auto it = h.callbacks.find(header.type);
-		if (it != h.callbacks.end()) {
-			it->second(this);
-		}
-		else {
-			printf("[No callback found for type %d]\n", header.type);			
-		}
-
 		return i;
 	}
 
@@ -397,7 +389,7 @@ struct Message
 	std::vector<ResourceRecord::Header> question;
 	std::vector<ResourceRecord> answer, authority, additional;
 
-	size_t deserialize(const char* bytes, size_t i, size_t max_i, ResourceRecord::DeserializeHelper& h)
+	size_t deserialize(const char* bytes, size_t i, size_t max_i, std::vector<std::string>& tmp)
 	{
 		uint16_t u16;
 
@@ -441,30 +433,18 @@ struct Message
 		additional.resize(u16);
 
 		for(auto& rr: question) {
-			i = rr.deserialize(bytes, i, max_i, h);
+			i = rr.deserialize(bytes, i, max_i, tmp);
 			if (i==0) {
 				return 0;
 			}
 		}
 
-		for(auto& rr: answer) {
-			i = rr.deserialize(bytes, i, max_i, h);
-			if (i==0) {
-				return 0;
-			}
-		}
-
-		for(auto& rr: authority) {
-			i = rr.deserialize(bytes, i, max_i, h);
-			if (i==0) {
-				return 0;
-			}
-		}
-
-		for(auto& rr: additional) {
-			i = rr.deserialize(bytes, i, max_i, h);
-			if (i==0) {
-				return 0;
+		for (auto v : {&answer, &authority, &additional} ) {
+			for (auto& rr : *v ) {
+				i = rr.deserialize(bytes, i, max_i, tmp);
+				if (i==0) {
+					return 0;
+				}
 			}
 		}
 

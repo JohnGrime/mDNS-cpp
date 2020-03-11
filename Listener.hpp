@@ -70,19 +70,21 @@ struct MulticastListener
 	}
 
 	// Attempt to create a socket bound to the specified port on all available
-	// interfaces (ifc == null) or only the specified interface (if!=null). You
-	// almost certainly do not want to supply an interface!
+	// interfaces (ifa == null) or only the specified interface (ifa!=null).
+	// You almost certainly want ifa == null!
 	static int CreateAndBind(int family, int port, const struct ifaddrs* ifa = nullptr)
 	{
 		// Check target family is valid
+
 		auto fstr = check_(family);
 
 		// If ifa specified, check ifa->family matches the target family
+
 		if (ifa)
 		{
 			auto sa = ifa->ifa_addr;
 			if (!sa || (sa->sa_family!=family)) {
-				ERROR("Family mistmatch: %s (%d) vs %s (%d)\n",
+				ERROR("Family mismatch: %s (%d) vs %s (%d)\n",
 					fstr, family, SockUtil::af_str(sa), sa->sa_family);
 			}
 		}
@@ -134,6 +136,7 @@ struct MulticastListener
 			break;
 		}
 
+		// debug
 		SockUtil::print(&ss);
 
 		// Bind socket
@@ -155,9 +158,10 @@ struct MulticastListener
 	static void JoinMulticastGroup(int sd, const char *mcast_ip, const ifaddrs *ifa = nullptr)
 	{
 		struct sockaddr sa;
-		socklen_t len = sizeof(sa.sa_data);
+		socklen_t len = sizeof(sa);
 
-		// Determine appropriate domain
+		// Determine appropriate domain, check suitability; only need family, so
+		// doesn't matter if rest of data truncated in getsockname()
 
 		if (getsockname(sd, &sa, &len) != 0) {
 			ERROR("getsockname() failed");
@@ -166,6 +170,8 @@ struct MulticastListener
 		int domain = sa.sa_family;
 
 		check_(domain);
+
+		// Protocol-specific setup
 
 		switch (domain) {
 			case AF_INET:
@@ -176,7 +182,8 @@ struct MulticastListener
 					ERROR("inet_pton(%s)", mcast_ip);
 				}
 
-				// No ifaddrs specified? Receive on any interface/address
+				// No ifaddrs specified? Receive on any interface/address,
+				// otherwise us specified interface.
 				if (ifa == nullptr) {
 					g.imr_address.s_addr = htonl(INADDR_ANY);
 					g.imr_ifindex = 0;
@@ -200,7 +207,8 @@ struct MulticastListener
 					ERROR("inet_pton(%s)", mcast_ip);
 				}
 
-				// No ifaddrs specified? Receive on default multicast interface
+				// No ifaddrs specified? Use default multicast interface,
+				// otherwise use specified interface.
 				if (ifa == nullptr) {
 					g.ipv6mr_interface = 0; // https://github.com/sccn/liblsl/issues/36
 				}
@@ -218,6 +226,7 @@ struct MulticastListener
 
 	//
 	// Read from socket, acquiring information about the data source and local interface/IP.
+	// Only family and address regions of dst are valid after call!
 	//
 	static int Read(int sd, void *buf, size_t len, struct sockaddr_storage *src, struct sockaddr_storage *dst, int *ifc_idx = nullptr)
 	{
@@ -259,7 +268,7 @@ struct MulticastListener
 				auto index = pi->ipi_ifindex;
 				auto addr_ptr = &pi->ipi_addr;
 
-				dst->ss_family = src->ss_family;
+				dst->ss_family = AF_INET;
 				memcpy(SockUtil::inet4(dst), addr_ptr, sizeof(*addr_ptr));
 				if (ifc_idx) *ifc_idx = index;
 
@@ -271,7 +280,7 @@ struct MulticastListener
 				auto index = pi->ipi6_ifindex;
 				auto addr_ptr = &pi->ipi6_addr;
 
-				dst->ss_family = src->ss_family;
+				dst->ss_family = AF_INET6;
 				memcpy(SockUtil::inet6(dst), addr_ptr, sizeof(*addr_ptr));
 				if (ifc_idx) *ifc_idx = index;
 

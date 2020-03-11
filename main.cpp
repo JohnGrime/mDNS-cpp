@@ -42,6 +42,8 @@ void print_interface_info(const Interfaces::Interface& ifc)
 	}		
 }
 
+using Callback = std::function<int (mDNS::DNS::ResourceRecord*)>;
+
 int main(int argc, char **argv)
 {
 	Interfaces ifcs;
@@ -55,6 +57,9 @@ int main(int argc, char **argv)
 		exit(0);
 	}
 
+	setbuf(stdout, nullptr);
+	setbuf(stderr, nullptr);
+
 	auto receive_IP = argv[1];
 	auto ifc = ifcs.LookupByIP(receive_IP, &ifa);
 	if (!ifc) ERROR("IP '%s' not found.\n", receive_IP);
@@ -63,9 +68,6 @@ int main(int argc, char **argv)
 	printf("Addresses associated with this interface:\n");
 	for (const auto ifa : ifc->addresses) SockUtil::print(ifa->ifa_addr);
 	printf("\n");
-
-	setbuf(stdout, nullptr);
-	setbuf(stderr, nullptr);
 
 	/*
 	// Print selected interfaces
@@ -92,7 +94,8 @@ int main(int argc, char **argv)
 		auto len = buf_vec.size();
 
 		DNS::Message msg;
-		DNS::ResourceRecord::DeserializeHelper h;
+		std::vector<std::string> tmp;
+		std::map<uint16_t,Callback> callbacks;
 
 		char IP_buf[64];
 
@@ -108,10 +111,10 @@ int main(int argc, char **argv)
 		};
 
 		// Default callbacks
-		for (const auto [type, str]: DNS::Defs::RRTypes) h.callbacks[type] = print_rr;
+		for (const auto [type, str]: DNS::Defs::RRTypes) callbacks[type] = print_rr;
 
 		// TXT parser
-		h.callbacks[DNS::Defs::TXT] = [buf,&h,&print_rr] (DNS::ResourceRecord *rr) -> int {
+		callbacks[DNS::Defs::TXT] = [buf,&tmp,&print_rr] (DNS::ResourceRecord *rr) -> int {
 				size_t i = rr->rd_ofs;
 				size_t max_i = i + rr->rd_len;
 
@@ -119,14 +122,14 @@ int main(int argc, char **argv)
 				bool lbl_terminate = false;
 
 				print_rr(rr);
-				DNS::Util::parse_labels(buf, i, max_i, lbl_compress, lbl_terminate, h.tmp);
-				for (const auto& str: h.tmp) printf("'%s' ", str.c_str());
+				DNS::Util::parse_labels(buf, i, max_i, lbl_compress, lbl_terminate, tmp);
+				for (const auto& str: tmp) printf("'%s' ", str.c_str());
 				printf("\n");
 				return 0;
 			};
 
 		// PTR callback
-		h.callbacks[DNS::Defs::PTR] = [buf,&h,&print_rr] (DNS::ResourceRecord *rr) -> int {
+		callbacks[DNS::Defs::PTR] = [buf,&tmp,&print_rr] (DNS::ResourceRecord *rr) -> int {
 				size_t i = rr->rd_ofs;
 				size_t max_i = i + rr->rd_len;
 
@@ -134,14 +137,14 @@ int main(int argc, char **argv)
 				bool lbl_terminate = true;
 
 				print_rr(rr);
-				DNS::Util::parse_labels(buf, i, max_i, lbl_compress, lbl_terminate, h.tmp);
-				for (const auto& str: h.tmp) printf("%s.", str.c_str());
+				DNS::Util::parse_labels(buf, i, max_i, lbl_compress, lbl_terminate, tmp);
+				for (const auto& str: tmp) printf("%s.", str.c_str());
 				printf("\n");
 				return 0;
 			};
 
 		// SRV callback
-		h.callbacks[DNS::Defs::SRV] = [buf,&h,&print_rr] (DNS::ResourceRecord *rr) -> int {
+		callbacks[DNS::Defs::SRV] = [buf,&tmp,&print_rr] (DNS::ResourceRecord *rr) -> int {
 				size_t i = rr->rd_ofs;
 				size_t max_i = i + rr->rd_len;
 
@@ -153,14 +156,14 @@ int main(int argc, char **argv)
 				i = DNS::Util::parse_atom(buf, i, max_i, priority, true);
 				i = DNS::Util::parse_atom(buf, i, max_i, weight, true);
 				i = DNS::Util::parse_atom(buf, i, max_i, port, true);
-				DNS::Util::parse_labels(buf, i, max_i, lbl_compress, lbl_terminate, h.tmp);
-				for (const auto& str: h.tmp) printf("%s.", str.c_str());
+				DNS::Util::parse_labels(buf, i, max_i, lbl_compress, lbl_terminate, tmp);
+				for (const auto& str: tmp) printf("%s.", str.c_str());
 				printf(" : priority=%d : weight=%d : port=%d\n",priority,weight,port);
 				return 0;
 			};
 
 		// A callback
-		h.callbacks[DNS::Defs::A] = [buf,&print_rr] (DNS::ResourceRecord *rr) -> int {
+		callbacks[DNS::Defs::A] = [buf,&print_rr] (DNS::ResourceRecord *rr) -> int {
 				print_rr(rr);
 				char b[64]; // keep separate from packet buffer!
 				printf("%s\n", inet_ntop(AF_INET, &buf[rr->rd_ofs], b, sizeof(b)) );
@@ -168,7 +171,7 @@ int main(int argc, char **argv)
 			};
 
 		// AAAA callback
-		h.callbacks[DNS::Defs::AAAA] = [buf,&print_rr] (DNS::ResourceRecord *rr) -> int {
+		callbacks[DNS::Defs::AAAA] = [buf,&print_rr] (DNS::ResourceRecord *rr) -> int {
 				print_rr(rr);
 				char b[64]; // keep separate from packet buffer!
 				printf("%s\n", inet_ntop(AF_INET6, &buf[rr->rd_ofs], b, sizeof(b)) );
@@ -179,18 +182,20 @@ int main(int argc, char **argv)
 		// Launch listener
 		//
 
-		auto sa = ifa->ifa_addr;
-		auto family = sa->sa_family;
+		int sd;
 
-		auto mcast_port = 5353;
-		auto mcast_IP = (family == AF_INET) ? "224.0.0.251" : "ff02::fb";
+		{
+			auto sa = ifa->ifa_addr;
+			auto port = 5353;
+			auto IP = (sa->sa_family == AF_INET) ? "224.0.0.251" : "ff02::fb";
 
-		int sd = Listener::CreateAndBind(family, mcast_port);
-		if (sd < 0) {
-			ERROR("Creation/bind failed.\n");				
+			sd = Listener::CreateAndBind(sa->sa_family, port);
+			if (sd < 0) {
+				ERROR("Creation/bind failed (%s : %d).\n", IP, port);
+			}
+
+			Listener::JoinMulticastGroup(sd, IP, ifa);
 		}
-
-		Listener::JoinMulticastGroup(sd, mcast_IP, ifa);
 
 		while (true)
 		{
@@ -202,9 +207,9 @@ int main(int argc, char **argv)
 
 			printf("\n***********************\n");
 			printf("Read %d bytes\n", (int)N);
-			printf( "%s => ", SockUtil::ip_str(&src, IP_buf, sizeof(IP_buf)) );
-			printf( "%s : ", SockUtil::ip_str(&dst, IP_buf, sizeof(IP_buf)) );
-			printf( "delivered_on=%d\n", index);
+			printf("%s => ", SockUtil::ip_str(&src, IP_buf, sizeof(IP_buf)));
+			printf("%s : ", SockUtil::ip_str(&dst, IP_buf, sizeof(IP_buf)));
+			printf("delivered_on=%d\n", index);
 
 			{
 				auto f = fopen("packet.data","w");
@@ -212,7 +217,21 @@ int main(int argc, char **argv)
 				fclose(f);
 			}
 
-			msg.deserialize(buf, 0, N, h);
+			msg.deserialize(buf, 0, N, tmp);
+
+			for (auto v : {&msg.answer, &msg.authority, &msg.additional} ) {
+				for (auto& rr : *v ) {
+
+					const auto it = callbacks.find(rr.header.type);
+					if (it == callbacks.end()) {
+						printf("[No callback found for type %d]\n", rr.header.type);
+						continue;
+					}
+
+					it->second(&rr);
+				}
+			}
+
 			msg.print_();
 			printf("\n");
 		}
