@@ -42,7 +42,68 @@ void print_interface_info(const Interfaces::Interface& ifc)
 	}		
 }
 
-using Callback = std::function<int (mDNS::DNS::ResourceRecord*)>;
+void print_dns_rr(const mDNS::DNS::ResourceRecord& rr, const char* buf, bool is_question)
+{
+	using Defs = mDNS::DNS::Defs;
+
+	char b[64];
+	std::vector<std::string> tmp;
+
+	printf("  {name=%s, type=%s (%d), class=%s (%d)} {TTL=%d rd_len=%d}",
+		rr.name.c_str(),
+		Defs::RRType(rr.type), rr.type,
+		Defs::Class(rr.clss), rr.clss,
+		rr.TTL, rr.rd_len );
+
+	if (is_question) {
+		printf("\n");
+		return;
+	}
+
+	size_t i = rr.rd_ofs;
+	size_t max_i = i + rr.rd_len;
+
+	tmp.clear();
+
+	printf( " { " );
+	switch (rr.type) {
+		case Defs::A:
+			printf("%s ", inet_ntop(AF_INET, &buf[i], b, sizeof(b)) );
+		break;
+
+		case Defs::AAAA:
+			printf("%s ", inet_ntop(AF_INET6, &buf[i], b, sizeof(b)) );
+		break;
+
+		case Defs::PTR:
+			DNS::Util::parse_labels(buf, i, max_i, true, true, tmp);
+
+			for (const auto& str: tmp) printf("%s.", str.c_str());
+				printf(" ");
+		break;
+
+		case Defs::SRV:
+		{
+			uint16_t priority, weight, port;
+
+			i = DNS::Util::parse_atom(buf, i, max_i, priority, true);
+			i = DNS::Util::parse_atom(buf, i, max_i, weight, true);
+			i = DNS::Util::parse_atom(buf, i, max_i, port, true);
+
+			DNS::Util::parse_labels(buf, i, max_i, true, true, tmp);
+
+			for (const auto& str: tmp) printf("%s.", str.c_str());
+			printf(" priority=%d weight=%d port=%d ", priority, weight, port);
+		}
+		break;
+
+		case Defs::TXT:
+			DNS::Util::parse_labels(buf, i, max_i, true, false, tmp);
+			for (const auto& str: tmp) printf("'%s' ", str.c_str());
+		break;
+	}
+	printf( "}\n" );
+}
 
 int main(int argc, char **argv)
 {
@@ -89,94 +150,18 @@ int main(int argc, char **argv)
 	printf("here we go ... \n");
 
 	{
+		using Defs = mDNS::DNS::Defs;
+
 		std::vector<char> buf_vec(66000);
 		char *buf = &buf_vec[0];
 		auto len = buf_vec.size();
 
 		DNS::Message msg;
 		std::vector<std::string> tmp;
-		std::map<uint16_t,Callback> callbacks;
 
 		char IP_buf[64];
 
 		using Listener = mDNS::MulticastListener;
-
-		//
-		// Set up listener callbacks
-		//
-
-		auto print_rr = [] (DNS::ResourceRecord *rr) -> int {
-			printf("-> Parse %s (%d)\n", DNS::Defs::RRType(rr->type), rr->type);
-			return 0;
-		};
-
-		// Default callbacks
-		for (const auto [type, str]: DNS::Defs::RRTypes) callbacks[type] = print_rr;
-
-		// TXT parser
-		callbacks[DNS::Defs::TXT] = [buf,&tmp,&print_rr] (DNS::ResourceRecord *rr) -> int {
-				size_t i = rr->rd_ofs;
-				size_t max_i = i + rr->rd_len;
-
-				bool lbl_compress = true;
-				bool lbl_terminate = false;
-
-				print_rr(rr);
-				DNS::Util::parse_labels(buf, i, max_i, lbl_compress, lbl_terminate, tmp);
-				for (const auto& str: tmp) printf("'%s' ", str.c_str());
-				printf("\n");
-				return 0;
-			};
-
-		// PTR callback
-		callbacks[DNS::Defs::PTR] = [buf,&tmp,&print_rr] (DNS::ResourceRecord *rr) -> int {
-				size_t i = rr->rd_ofs;
-				size_t max_i = i + rr->rd_len;
-
-				bool lbl_compress = true;
-				bool lbl_terminate = true;
-
-				print_rr(rr);
-				DNS::Util::parse_labels(buf, i, max_i, lbl_compress, lbl_terminate, tmp);
-				for (const auto& str: tmp) printf("%s.", str.c_str());
-				printf("\n");
-				return 0;
-			};
-
-		// SRV callback
-		callbacks[DNS::Defs::SRV] = [buf,&tmp,&print_rr] (DNS::ResourceRecord *rr) -> int {
-				size_t i = rr->rd_ofs;
-				size_t max_i = i + rr->rd_len;
-
-				bool lbl_compress = true;
-				bool lbl_terminate = true;
-
-				print_rr(rr);
-				uint16_t priority, weight, port;
-				i = DNS::Util::parse_atom(buf, i, max_i, priority, true);
-				i = DNS::Util::parse_atom(buf, i, max_i, weight, true);
-				i = DNS::Util::parse_atom(buf, i, max_i, port, true);
-				DNS::Util::parse_labels(buf, i, max_i, lbl_compress, lbl_terminate, tmp);
-				for (const auto& str: tmp) printf("%s.", str.c_str());
-				printf(" : priority=%d : weight=%d : port=%d\n",priority,weight,port);
-				return 0;
-			};
-
-		// A callback
-		callbacks[DNS::Defs::A] = [buf,&print_rr] (DNS::ResourceRecord *rr) -> int {
-				print_rr(rr);
-				char b[64]; // keep separate from packet buffer!
-				printf("%s\n", inet_ntop(AF_INET, &buf[rr->rd_ofs], b, sizeof(b)) );
-				return 0;
-			};
-
-		// AAAA callback
-		callbacks[DNS::Defs::AAAA] = [buf,&print_rr] (DNS::ResourceRecord *rr) -> int {
-				print_rr(rr);
-				char b[64]; // keep separate from packet buffer!
-				printf("%s\n", inet_ntop(AF_INET6, &buf[rr->rd_ofs], b, sizeof(b)) );
-				return 0;
-			};
 
 		//
 		// Launch listener
@@ -219,20 +204,22 @@ int main(int argc, char **argv)
 
 			msg.deserialize(buf, 0, N, tmp);
 
-			for (auto v : {&msg.answer, &msg.authority, &msg.additional} ) {
-				for (auto& rr : *v ) {
+			// Print header
 
-					const auto it = callbacks.find(rr.type);
-					if (it == callbacks.end()) {
-						printf("[No callback found for type %d]\n", rr.type);
-						continue;
-					}
+			printf("{id %d : flags (%d)", msg.id, msg.flags);
+			for (const auto& it : Defs::HeaderFlags) {
+				if (msg.flags & it.first) printf(" %s", it.second.c_str());
+			}
+			printf("}\n");
 
-					it->second(&rr);
+			// Print sections
+
+			for (auto v : {&msg.question, &msg.answer, &msg.authority, &msg.additional} ) {
+				for (auto& rr : *v) {
+					print_dns_rr(rr, buf, (v == &msg.question));
 				}
 			}
 
-			msg.print_();
 			printf("\n");
 		}
 

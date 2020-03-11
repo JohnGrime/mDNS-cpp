@@ -204,8 +204,6 @@ struct Util
 	{
 		uint8_t ptr_bits = 0xc0;    // 0b11000000
 		uint16_t idx_bits = 0x3FFF; // 0b0011111111111111
-
-		results.clear();
 		
 		if (!bytes) {
 			WARN("Null bytes pointer!");
@@ -308,6 +306,7 @@ struct ResourceRecord
 		// Header
 
 		// Name: allow compression, require terminal zero-string
+		tmp.clear();
 		i = Util::parse_labels(bytes, i, max_i, true, true, tmp);
 		if (i==0) {
 			return 0;
@@ -353,14 +352,6 @@ struct ResourceRecord
 
 		return i;
 	}
-
-	void print_() const
-	{
-		printf("{name=%s, type=%s (%d), class=%s (%d)} {TTL=%d rd_len=%d}",
-			name.c_str(), Defs::RRType(type), type, Defs::Class(clss), clss,
-			TTL, rd_len );
-	}	
-
 };
 
 struct Message
@@ -427,39 +418,6 @@ struct Message
 		}
 
 		return i;
-	}
-
-	void print_() const
-	{
-		printf("{id %d : flags (%d)", id, flags);
-		for (const auto& it : Defs::HeaderFlags) {
-			if (flags&it.first) printf(" %s", it.second.c_str());
-		}
-		printf("}\n");
-
-		printf("Question:\n");
-		for (const auto& x: question) {
-			x.print_();
-			printf("\n");
-		}
-
-		printf("Answer:\n");
-		for (const auto& x: answer) {
-			x.print_();
-			printf("\n");
-		}
-
-		printf("Authority:\n");
-		for (const auto& x: authority) {
-			x.print_();
-			printf("\n");
-		}
-
-		printf("Additional:\n");
-		for (const auto& x: additional) {
-			x.print_();
-			printf("\n");
-		}
 	}
 };
 
