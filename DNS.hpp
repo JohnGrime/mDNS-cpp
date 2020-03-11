@@ -158,7 +158,7 @@ struct Defs
 	static const char* Class(uint16_t k) { return get(Classes,k); }
 };
 
-struct Util
+struct Parse
 {
 	template <typename T>
 	static T hton(const T& t)
@@ -173,7 +173,7 @@ struct Util
 	static T ntoh(const T& t) { return hton(t); }
 
 	template<typename T>
-	static size_t parse_atom(const char *bytes, size_t i, size_t max_i, T& t, bool endian = false)
+	static size_t atom(const char *bytes, size_t i, size_t max_i, T& t, bool endian = true)
 	{
 		if (!bytes) {
 			WARN("Null bytes pointer!");
@@ -195,7 +195,7 @@ struct Util
 	// Parse byte sequence of [N][b1,b2,...bN] into labels; RFC1035:4.1.4
 	// allow_compression: can we follow "pointers" for compression.
 	// require_terminator: do we require a final zero-string for clean exit
-	static size_t parse_labels(
+	static size_t labels(
 		const char* bytes,
 		size_t i, size_t max_i,
 		bool allow_compression,
@@ -228,7 +228,7 @@ struct Util
 			if (compression == 0) {
 				uint8_t lbl_len;
 
-				i = parse_atom(bytes, i, max_i, lbl_len);
+				i = atom(bytes, i, max_i, lbl_len);
 				if (lbl_len == 0) return i;
 
 				if (i+lbl_len > max_i) {
@@ -251,8 +251,8 @@ struct Util
 
 				// Get new offset into packet data
 				auto old_i = i;
-				i = parse_atom(bytes, i, max_i, new_i);
-				new_i = ntoh(new_i) & idx_bits;
+				i = atom(bytes, i, max_i, new_i);
+				new_i = new_i & idx_bits;
 
 				// Check for infinite loop
 				if (new_i == old_i) {
@@ -267,7 +267,7 @@ struct Util
 				}
 
  				// Note - return value of parse_labels() ignored, we instead return existing i
-				parse_labels(bytes, new_i, max_i, allow_compression, require_terminator, results);
+				Parse::labels(bytes, new_i, max_i, allow_compression, require_terminator, results);
 				return i;
 			}
 			// Labels are compressed in a manner we do not support.
@@ -307,7 +307,7 @@ struct ResourceRecord
 
 		// Name: allow compression, require terminal zero-string
 		tmp.clear();
-		i = Util::parse_labels(bytes, i, max_i, true, true, tmp);
+		i = Parse::labels(bytes, i, max_i, true, true, tmp);
 		if (i==0) {
 			return 0;
 		}
@@ -317,12 +317,12 @@ struct ResourceRecord
 			name += tmp[ti] + ".";
 		}
 
-		i = Util::parse_atom(bytes, i, max_i, type, true);
+		i = Parse::atom(bytes, i, max_i, type);
 		if (i==0) {
 			return 0;
 		}
 
-		i = Util::parse_atom(bytes, i, max_i, clss, true);
+		i = Parse::atom(bytes, i, max_i, clss);
 		if (i==0) {
 			return 0;
 		}
@@ -331,12 +331,12 @@ struct ResourceRecord
 
 		// Body
 
-		i = Util::parse_atom(bytes, i, max_i, TTL, true);
+		i = Parse::atom(bytes, i, max_i, TTL);
 		if (i==0) {
 			return 0;
 		}
 
-		i = Util::parse_atom(bytes, i, max_i, rd_len, true);
+		i = Parse::atom(bytes, i, max_i, rd_len);
 		if (i==0) {
 			return 0;
 		}
@@ -360,6 +360,11 @@ struct Message
 	uint16_t id = 0;
 	uint16_t flags = 0;
 
+	uint16_t n_question = 0;
+	uint16_t n_answer = 0;
+	uint16_t n_authority = 0;
+	uint16_t n_additional = 0;
+
 	// Body - should we bother to store these? Parser routines can handle that?
 	std::vector<ResourceRecord> question, answer, authority, additional;
 
@@ -372,35 +377,35 @@ struct Message
 			return 0;
 		}
 
-		i = Util::parse_atom(bytes, i, max_i, id, true);
+		i = Parse::atom(bytes, i, max_i, id);
 		if (i==0) {
 			return 0;
 		}
 
-		i = Util::parse_atom(bytes, i, max_i, flags, true);
+		i = Parse::atom(bytes, i, max_i, flags);
 		if (i==0) {
 			return 0;
 		}
 
-		i = Util::parse_atom(bytes, i, max_i, u16, true);
+		i = Parse::atom(bytes, i, max_i, u16);
 		if (i==0) {
 			return 0;
 		}
 		question.resize(u16);
 
-		i = Util::parse_atom(bytes, i, max_i, u16, true);
+		i = Parse::atom(bytes, i, max_i, u16);
 		if (i==0) {
 			return 0;
 		}
 		answer.resize(u16);
 
-		i = Util::parse_atom(bytes, i, max_i, u16, true);
+		i = Parse::atom(bytes, i, max_i, u16);
 		if (i==0) {
 			return 0;
 		}
 		authority.resize(u16);
 
-		i = Util::parse_atom(bytes, i, max_i, u16, true);
+		i = Parse::atom(bytes, i, max_i, u16);
 		if (i==0) {
 			return 0;
 		}

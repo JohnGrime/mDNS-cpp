@@ -76,7 +76,7 @@ void print_dns_rr(const mDNS::DNS::ResourceRecord& rr, const char* buf, bool is_
 		break;
 
 		case Defs::PTR:
-			DNS::Util::parse_labels(buf, i, max_i, true, true, tmp);
+			DNS::Parse::labels(buf, i, max_i, true, true, tmp);
 
 			for (const auto& str: tmp) printf("%s.", str.c_str());
 				printf(" ");
@@ -86,11 +86,11 @@ void print_dns_rr(const mDNS::DNS::ResourceRecord& rr, const char* buf, bool is_
 		{
 			uint16_t priority, weight, port;
 
-			i = DNS::Util::parse_atom(buf, i, max_i, priority, true);
-			i = DNS::Util::parse_atom(buf, i, max_i, weight, true);
-			i = DNS::Util::parse_atom(buf, i, max_i, port, true);
+			i = DNS::Parse::atom(buf, i, max_i, priority);
+			i = DNS::Parse::atom(buf, i, max_i, weight);
+			i = DNS::Parse::atom(buf, i, max_i, port);
 
-			DNS::Util::parse_labels(buf, i, max_i, true, true, tmp);
+			DNS::Parse::labels(buf, i, max_i, true, true, tmp);
 
 			for (const auto& str: tmp) printf("%s.", str.c_str());
 			printf(" priority=%d weight=%d port=%d ", priority, weight, port);
@@ -98,7 +98,7 @@ void print_dns_rr(const mDNS::DNS::ResourceRecord& rr, const char* buf, bool is_
 		break;
 
 		case Defs::TXT:
-			DNS::Util::parse_labels(buf, i, max_i, true, false, tmp);
+			DNS::Parse::labels(buf, i, max_i, true, false, tmp);
 			for (const auto& str: tmp) printf("'%s' ", str.c_str());
 		break;
 	}
