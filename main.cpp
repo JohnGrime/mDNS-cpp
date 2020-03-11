@@ -42,9 +42,9 @@ void print_interface_info(const Interfaces::Interface& ifc)
 	}		
 }
 
-void print_dns_rr(const mDNS::DNS::ResourceRecord& rr, const char* buf, bool is_question)
+void print_dns_rr(const DNS::ResourceRecord& rr, const char* buf, bool is_question)
 {
-	using Defs = mDNS::DNS::Defs;
+	using Defs = DNS::Defs;
 
 	char b[64];
 	std::vector<std::string> tmp;
@@ -107,10 +107,22 @@ void print_dns_rr(const mDNS::DNS::ResourceRecord& rr, const char* buf, bool is_
 
 int main(int argc, char **argv)
 {
+	using Defs = DNS::Defs;
+	using Listener = MulticastListener;
+
 	Interfaces ifcs;
+
+	DNS::Message msg;
+	DNS::ResourceRecord rr;
+
 	ifaddrs* ifa = nullptr;
 
-	std::string str;
+	// Incoming packets go in here.
+	std::vector<char> msg_buf_vec(66000);
+	char * const msg_buf = &msg_buf_vec[0];
+	const auto msg_buf_max = msg_buf_vec.size();
+
+	std::vector<std::string> tmp;
 
 	// Print all interfaces
 	if (argc<2) {
@@ -121,14 +133,17 @@ int main(int argc, char **argv)
 	setbuf(stdout, nullptr);
 	setbuf(stderr, nullptr);
 
-	auto receive_IP = argv[1];
-	auto ifc = ifcs.LookupByIP(receive_IP, &ifa);
-	if (!ifc) ERROR("IP '%s' not found.\n", receive_IP);
+	// Find specified interface via IP
+	{
+		auto receive_IP = argv[1];
+		auto ifc = ifcs.LookupByIP(receive_IP, &ifa);
+		if (!ifc) ERROR("IP '%s' not found.\n", receive_IP);
 
-	printf("'%s' => '%s' %d\n", receive_IP, ifc->name.c_str(), ifc->index);
-	printf("Addresses associated with this interface:\n");
-	for (const auto ifa : ifc->addresses) SockUtil::print(ifa->ifa_addr);
-	printf("\n");
+		printf("'%s' => '%s' %d\n", receive_IP, ifc->name.c_str(), ifc->index);
+		printf("Addresses associated with this interface:\n");
+		for (const auto ifa : ifc->addresses) SockUtil::print(ifa->ifa_addr);
+		printf("\n");
+	}
 
 	/*
 	// Print selected interfaces
@@ -149,80 +164,124 @@ int main(int argc, char **argv)
 
 	printf("here we go ... \n");
 
+	//
+	// Launch listener
+	//
+
+	int sd;
+
+	// Set up mDNS listener socket
+
 	{
-		using Defs = mDNS::DNS::Defs;
+		auto sa = ifa->ifa_addr;
+		auto port = 5353;
+		auto IP = (sa->sa_family == AF_INET) ? "224.0.0.251" : "ff02::fb";
 
-		std::vector<char> buf_vec(66000);
-		char *buf = &buf_vec[0];
-		auto len = buf_vec.size();
-
-		DNS::Message msg;
-		std::vector<std::string> tmp;
-
-		char IP_buf[64];
-
-		using Listener = mDNS::MulticastListener;
-
-		//
-		// Launch listener
-		//
-
-		int sd;
-
-		{
-			auto sa = ifa->ifa_addr;
-			auto port = 5353;
-			auto IP = (sa->sa_family == AF_INET) ? "224.0.0.251" : "ff02::fb";
-
-			sd = Listener::CreateAndBind(sa->sa_family, port);
-			if (sd < 0) {
-				ERROR("Creation/bind failed (%s : %d).\n", IP, port);
-			}
-
-			Listener::JoinMulticastGroup(sd, IP, ifa);
+		sd = Listener::CreateAndBind(sa->sa_family, port);
+		if (sd < 0) {
+			ERROR("Creation/bind failed (%s : %d).\n", IP, port);
 		}
 
-		while (true)
-		{
-			struct sockaddr_storage src, dst;
-			int index;
+		Listener::JoinMulticastGroup(sd, IP, ifa);
+	}
 
-			auto N = Listener::Read(sd, buf, len, &src, &dst, &index);
-			if (N<0) ERROR("read()");
+	// Process incoming mDNS messages
+
+	while (true)
+	{
+		struct sockaddr_storage src, dst;
+		int index;
+
+		auto N = Listener::Read(sd, msg_buf, msg_buf_max, &src, &dst, &index);
+		if (N<0) ERROR("read()");
+
+		// Print some packet information
+
+		{
+			char b[64];
 
 			printf("\n***********************\n");
 			printf("Read %d bytes\n", (int)N);
-			printf("%s => ", SockUtil::ip_str(&src, IP_buf, sizeof(IP_buf)));
-			printf("%s : ", SockUtil::ip_str(&dst, IP_buf, sizeof(IP_buf)));
+			printf("%s => ", SockUtil::ip_str(&src, b, sizeof(b)));
+			printf("%s : ", SockUtil::ip_str(&dst, b, sizeof(b)));
 			printf("delivered_on=%d\n", index);
-
-			{
-				auto f = fopen("packet.data","w");
-				fwrite(buf,N,1,f);
-				fclose(f);
-			}
-
-			msg.deserialize(buf, 0, N, tmp);
-
-			// Print header
-
-			printf("{id %d : flags (%d)", msg.id, msg.flags);
-			for (const auto& it : Defs::HeaderFlags) {
-				if (msg.flags & it.first) printf(" %s", it.second.c_str());
-			}
-			printf("}\n");
-
-			// Print sections
-
-			for (auto v : {&msg.question, &msg.answer, &msg.authority, &msg.additional} ) {
-				for (auto& rr : *v) {
-					print_dns_rr(rr, buf, (v == &msg.question));
-				}
-			}
-
-			printf("\n");
 		}
 
-		close(sd);
+		// Save packet
+
+		{
+			auto f = fopen("packet.data","w");
+			fwrite(msg_buf,N,1,f);
+			fclose(f);
+		}
+
+		// Get DNS header information
+
+		size_t i = msg.read_header(msg_buf, 0, N);
+		if (i == 0) {
+			continue;
+		}
+
+		// Print header info
+
+		printf("{id %d : flags (%d)", msg.id, msg.flags);
+		for (const auto& it : Defs::HeaderFlags) {
+			if (msg.flags & it.first) printf(" %s", it.second.c_str());
+		}
+		printf("}\n");
+
+		// Print resource record sections
+
+		printf("Questions:\n");
+		for (auto ii=0; ii<msg.n_question; ii++) {
+			i = rr.read_header(msg_buf, i, N, tmp);
+			if (i==0) break;
+
+			print_dns_rr(rr, msg_buf, true);
+		}
+		if (i == 0) {
+			printf("Problem parsing section.\n");
+			continue;
+		}
+
+		printf("Answers:\n");
+		for (auto ii=0; ii<msg.n_answer; ii++) {
+			i = rr.read_header_and_body(msg_buf, i, N, tmp);
+			if (i==0) break;
+
+			print_dns_rr(rr, msg_buf, false);
+		}
+		if (i == 0) {
+			printf("Problem parsing section.\n");
+			continue;
+		}
+
+		printf("Authority:\n");
+		for (auto ii=0; ii<msg.n_authority; ii++) {
+			i = rr.read_header_and_body(msg_buf, i, N, tmp);
+			if (i==0) break;
+
+			print_dns_rr(rr, msg_buf, false);
+		}
+		if (i == 0) {
+			printf("Problem parsing section.\n");
+			continue;
+		}
+
+		printf("Additional:\n");
+		for (auto ii=0; ii<msg.n_additional; ii++) {
+			i = rr.read_header_and_body(msg_buf, i, N, tmp);
+			if (i==0) break;
+
+			print_dns_rr(rr, msg_buf, false);
+		}
+		if (i == 0) {
+			printf("Problem parsing section.\n");
+			continue;
+		}
+
+		printf("\n");
 	}
+
+	close(sd);
 }

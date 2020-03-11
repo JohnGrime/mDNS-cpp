@@ -296,14 +296,14 @@ struct ResourceRecord
 	uint16_t rd_ofs = 0; // offset into original buffer for payload (in bytes)
 	uint16_t rd_len = 0; // length of payload (in bytes)
 
-	size_t deserialize(const char* bytes, size_t i, size_t max_i, std::vector<std::string>& tmp, bool only_header)
+	// Header and body deserialization invoked explicitly!
+
+	size_t read_header(const char* bytes, size_t i, size_t max_i, std::vector<std::string>& tmp)
 	{
 		if (!bytes) {
 			WARN("Null bytes pointer!");
 			return 0;
 		}
-
-		// Header
 
 		// Name: allow compression, require terminal zero-string
 		tmp.clear();
@@ -327,9 +327,15 @@ struct ResourceRecord
 			return 0;
 		}
 
-		if (only_header) return i;
+		return i;
+	}
 
-		// Body
+	size_t read_header_and_body(const char* bytes, size_t i, size_t max_i, std::vector<std::string>& tmp)
+	{
+		i = read_header(bytes, i, max_i, tmp);
+		if (i == 0) {
+			return 0;
+		}
 
 		i = Parse::atom(bytes, i, max_i, TTL);
 		if (i==0) {
@@ -351,12 +357,15 @@ struct ResourceRecord
 		}
 
 		return i;
+
+		return i;
 	}
 };
 
 struct Message
 {
-	// Header
+	// Message header ...
+
 	uint16_t id = 0;
 	uint16_t flags = 0;
 
@@ -365,13 +374,10 @@ struct Message
 	uint16_t n_authority = 0;
 	uint16_t n_additional = 0;
 
-	// Body - should we bother to store these? Parser routines can handle that?
-	std::vector<ResourceRecord> question, answer, authority, additional;
+	// ... then message body follows in source buffer.
 
-	size_t deserialize(const char* bytes, size_t i, size_t max_i, std::vector<std::string>& tmp)
+	size_t read_header(const char* bytes, size_t i, size_t max_i)
 	{
-		uint16_t u16;
-
 		if (!bytes) {
 			WARN("Null bytes pointer!");
 			return 0;
@@ -387,39 +393,24 @@ struct Message
 			return 0;
 		}
 
-		i = Parse::atom(bytes, i, max_i, u16);
+		i = Parse::atom(bytes, i, max_i, n_question);
 		if (i==0) {
 			return 0;
 		}
-		question.resize(u16);
 
-		i = Parse::atom(bytes, i, max_i, u16);
+		i = Parse::atom(bytes, i, max_i, n_answer);
 		if (i==0) {
 			return 0;
 		}
-		answer.resize(u16);
 
-		i = Parse::atom(bytes, i, max_i, u16);
+		i = Parse::atom(bytes, i, max_i, n_authority);
 		if (i==0) {
 			return 0;
 		}
-		authority.resize(u16);
 
-		i = Parse::atom(bytes, i, max_i, u16);
+		i = Parse::atom(bytes, i, max_i, n_additional);
 		if (i==0) {
 			return 0;
-		}
-		additional.resize(u16);
-
-		// Question section only RR header, rest are complete RR entries
-		for (auto v : {&question, &answer, &authority, &additional} ) {
-			auto only_header = (v == &question) ? true : false;
-			for (auto& rr : *v ) {
-				i = rr.deserialize(bytes, i, max_i, tmp, only_header);
-				if (i==0) {
-					return 0;
-				}
-			}
 		}
 
 		return i;
