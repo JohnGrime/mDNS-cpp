@@ -106,7 +106,7 @@ int main(int argc, char **argv)
 		//
 
 		auto print_rr = [] (DNS::ResourceRecord *rr) -> int {
-			printf("-> Parse %s (%d)\n", DNS::Defs::RRType(rr->header.type), rr->header.type);
+			printf("-> Parse %s (%d)\n", DNS::Defs::RRType(rr->type), rr->type);
 			return 0;
 		};
 
@@ -222,9 +222,9 @@ int main(int argc, char **argv)
 			for (auto v : {&msg.answer, &msg.authority, &msg.additional} ) {
 				for (auto& rr : *v ) {
 
-					const auto it = callbacks.find(rr.header.type);
+					const auto it = callbacks.find(rr.type);
 					if (it == callbacks.end()) {
-						printf("[No callback found for type %d]\n", rr.header.type);
+						printf("[No callback found for type %d]\n", rr.type);
 						continue;
 					}
 

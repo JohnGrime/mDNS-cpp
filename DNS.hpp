@@ -286,68 +286,51 @@ struct Util
 //
 struct ResourceRecord
 {
-	struct Header
-	{
-		std::string name;
-		uint16_t type = 0;
-		uint16_t clss = 0;
+	// Header; present in all DNS message sections
 
-		size_t deserialize(const char* bytes, size_t i, size_t max_i, std::vector<std::string>& tmp)
-		{
-			if (!bytes) {
-				WARN("Null bytes pointer!");
-				return 0;
-			}
+	std::string name;
+	uint16_t type = 0;
+	uint16_t clss = 0;
 
-			// RR header: allow compression, require terminal zero-string
-			i = Util::parse_labels(bytes, i, max_i, true, true, tmp);
-			if (i==0) {
-				return 0;
-			}
-			
-			name = "";
-			for (size_t ti=0, N=tmp.size(); ti<N; ti++ ) {
-				name += tmp[ti] + ".";
-			}
-
-			i = Util::parse_atom(bytes, i, max_i, type, true);
-			if (i==0) {
-				return 0;
-			}
-
-			i = Util::parse_atom(bytes, i, max_i, clss, true);
-			if (i==0) {
-				return 0;
-			}
-
-			return i;
-		}
-
-		void print_() const
-		{
-			printf("{name=%s, type=%s (%d), class=%s (%d)}", name.c_str(), Defs::RRType(type), type, Defs::Class(clss), clss);
-		}
-	};
-
-	Header header;
+	// Body; present in answer, authority, and additional sections
 
 	uint32_t TTL = 0;
+	uint16_t rd_ofs = 0; // offset into original buffer for payload (in bytes)
+	uint16_t rd_len = 0; // length of payload (in bytes)
 
-	// Raw data for the record; offset is into ENTIRE packet data buffer
-	uint16_t rd_ofs = 0;
-	uint16_t rd_len = 0;
-
-	size_t deserialize(const char* bytes, size_t i, size_t max_i, std::vector<std::string>& tmp)
+	size_t deserialize(const char* bytes, size_t i, size_t max_i, std::vector<std::string>& tmp, bool only_header)
 	{
 		if (!bytes) {
 			WARN("Null bytes pointer!");
 			return 0;
 		}
 
-		i = header.deserialize(bytes, i, max_i, tmp);
+		// Header
+
+		// Name: allow compression, require terminal zero-string
+		i = Util::parse_labels(bytes, i, max_i, true, true, tmp);
 		if (i==0) {
 			return 0;
 		}
+		
+		name = "";
+		for (size_t ti=0, N=tmp.size(); ti<N; ti++ ) {
+			name += tmp[ti] + ".";
+		}
+
+		i = Util::parse_atom(bytes, i, max_i, type, true);
+		if (i==0) {
+			return 0;
+		}
+
+		i = Util::parse_atom(bytes, i, max_i, clss, true);
+		if (i==0) {
+			return 0;
+		}
+
+		if (only_header) return i;
+
+		// Body
 
 		i = Util::parse_atom(bytes, i, max_i, TTL, true);
 		if (i==0) {
@@ -373,8 +356,9 @@ struct ResourceRecord
 
 	void print_() const
 	{
-		header.print_();
-		printf(" {TTL=%d rd_len=%d}", TTL, rd_len);
+		printf("{name=%s, type=%s (%d), class=%s (%d)} {TTL=%d rd_len=%d}",
+			name.c_str(), Defs::RRType(type), type, Defs::Class(clss), clss,
+			TTL, rd_len );
 	}	
 
 };
@@ -386,8 +370,7 @@ struct Message
 	uint16_t flags = 0;
 
 	// Body - should we bother to store these? Parser routines can handle that?
-	std::vector<ResourceRecord::Header> question;
-	std::vector<ResourceRecord> answer, authority, additional;
+	std::vector<ResourceRecord> question, answer, authority, additional;
 
 	size_t deserialize(const char* bytes, size_t i, size_t max_i, std::vector<std::string>& tmp)
 	{
@@ -432,16 +415,11 @@ struct Message
 		}
 		additional.resize(u16);
 
-		for(auto& rr: question) {
-			i = rr.deserialize(bytes, i, max_i, tmp);
-			if (i==0) {
-				return 0;
-			}
-		}
-
-		for (auto v : {&answer, &authority, &additional} ) {
+		// Question section only RR header, rest are complete RR entries
+		for (auto v : {&question, &answer, &authority, &additional} ) {
+			auto only_header = (v == &question) ? true : false;
 			for (auto& rr : *v ) {
-				i = rr.deserialize(bytes, i, max_i, tmp);
+				i = rr.deserialize(bytes, i, max_i, tmp, only_header);
 				if (i==0) {
 					return 0;
 				}
