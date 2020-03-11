@@ -70,31 +70,10 @@ struct Interfaces
 
 	void Refresh()
 	{
-		std::map<std::string, size_t> n2i;
+		using ifc_idx_t = unsigned int;
+		std::map<ifc_idx_t, size_t> i2i;
 
 		Clear();
-
-		// Get name/index pairs for all interfaces present, and determine
-		// INTERNAL temporary indices into the interfaces[] vector. Note:
-		// these internal indices are NOT the OS interface numbers!
-
-		auto nameindex_pairs = if_nameindex();
-		if (!nameindex_pairs) ERROR("if_nameindex()");
-
-		for (auto i=0; ; i++) {
-			auto name = nameindex_pairs[i].if_name;
-			auto idx = nameindex_pairs[i].if_index; // Actual OS interface number
-
-			if (!name && !idx) break;
-
-			// INTERNAL temp indices into interfaces[] vector
-			if (n2i.find(name) == n2i.end()) {
-				n2i[name] = interfaces.size();
-				interfaces.push_back( {name,idx,{}} );
-			}
-		}
-
-		if_freenameindex(nameindex_pairs);
 
 		// Get all addresses assigned to any interface, and add to the
 		// appropriate Interface structures in the interfaces[] vector.
@@ -102,12 +81,15 @@ struct Interfaces
 		if (getifaddrs(&ifa_) != 0) ERROR("getifaddrs()");
 
 		for (auto x=ifa_; x!=nullptr; x=x->ifa_next) {
-			const auto name = x->ifa_name;
-
-			const auto it = n2i.find(name);
-			if (it == n2i.end()) ERROR("Bad name: '%s'", name);
-
-			interfaces[it->second].addresses.push_back(x);
+			const auto idx = if_nametoindex(x->ifa_name);
+			const auto it = i2i.find(idx);
+			if (it == i2i.end()) {
+				i2i[idx] = interfaces.size();
+				interfaces.push_back( {x->ifa_name,idx,{x}} );
+			}
+			else {
+				interfaces[it->second].addresses.push_back(x);
+			}
 		}
 	}
 
