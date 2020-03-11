@@ -102,37 +102,37 @@ struct MulticastListener
 
 		switch (family) {
 			case AF_INET:
-				{
-					auto s = (struct sockaddr_in *) &ss;
-					bind_len = sizeof(*s); // deref for correct size!
+			{
+				auto s = (struct sockaddr_in *) &ss;
+				bind_len = sizeof(*s); // deref for correct size!
 
-					s->sin_family = family;
-					s->sin_port = htons(port);
-					s->sin_addr.s_addr = htonl(INADDR_ANY); // htonl(); INADDR_ANY maybe != 0
+				s->sin_family = family;
+				s->sin_port = htons(port);
+				s->sin_addr.s_addr = htonl(INADDR_ANY); // htonl(); INADDR_ANY maybe != 0
 
-					if (ifa) {
-						auto addr = SockUtil::inet4(ifa->ifa_addr);
-						if (!addr) ERROR("Bad IPv4 address");
-						s->sin_addr.s_addr = htonl(addr->s_addr);
-					}
+				if (ifa) {
+					auto addr = SockUtil::inet4(ifa->ifa_addr);
+					if (!addr) ERROR("Bad IPv4 address");
+					s->sin_addr.s_addr = htonl(addr->s_addr);
 				}
+			}
 			break;
 
 			case AF_INET6:
-				{
-					auto s = (struct sockaddr_in6 *) &ss;
-					bind_len = sizeof(*s); // deref for correct size!
+			{
+				auto s = (struct sockaddr_in6 *) &ss;
+				bind_len = sizeof(*s); // deref for correct size!
 
-					s->sin6_family = family;
-					s->sin6_port = htons(port);
-					s->sin6_addr = in6addr_any; // no htonl(); IPv6 constants endian-agnostic
+				s->sin6_family = family;
+				s->sin6_port = htons(port);
+				s->sin6_addr = in6addr_any; // no htonl(); IPv6 constants endian-agnostic
 
-					if (ifa) {
-						auto addr = SockUtil::inet6(ifa->ifa_addr);
-						if (!addr) ERROR("Bad IPv6 address");
-						s->sin6_addr = *addr;
-					}
+				if (ifa) {
+					auto addr = SockUtil::inet6(ifa->ifa_addr);
+					if (!addr) ERROR("Bad IPv6 address");
+					s->sin6_addr = *addr;
 				}
+			}
 			break;
 		}
 
