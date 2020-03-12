@@ -116,7 +116,7 @@ struct Interfaces
 
 	const Interface* LookupByIP(const char *IP, ifaddrs **ifa_ = nullptr)
 	{
-		char buf[64];
+		char buf[INET6_ADDRSTRLEN];
 		auto len = sizeof(buf);
 
 		if (!IP) return nullptr;
@@ -135,6 +135,37 @@ struct Interfaces
 
 		return nullptr;
 	}
+
+	// Debug.
+	static void print_(const Interface& ifc)
+	{
+		char buf[INET6_ADDRSTRLEN];
+		auto len = sizeof(buf);
+
+		printf("%s [%d]\n", ifc.name.c_str(), ifc.index);
+
+		for (const auto ifa : ifc.addresses) {
+
+			printf("  %s\n", SockUtil::af_str(ifa->ifa_addr));
+
+			printf("    ifa_flags: ");
+			for (auto &x : Interfaces::iff_flag_map) {
+				if (ifa->ifa_flags & x.first) printf("%s ", x.second.c_str());
+			}
+			printf("\n");
+
+			if (SockUtil::is_inet(ifa->ifa_addr)) {
+				printf("    ifa_addr: %s\n", SockUtil::ip_str(ifa->ifa_addr,buf,len));
+				printf("    ifa_netmask: %s\n", SockUtil::ip_str(ifa->ifa_netmask,buf,len));
+				printf("    ifa_broadaddr: %s\n", SockUtil::ip_str(ifa->ifa_broadaddr,buf,len));
+			}
+			else if (ifa->ifa_addr->sa_family == AF_PACKET) {
+				printf("    MAC: %s\n", SockUtil::mac_str(ifa->ifa_addr,buf,len));
+			}
+
+			printf("\n");
+		}		
+	}	
 };
 
 }

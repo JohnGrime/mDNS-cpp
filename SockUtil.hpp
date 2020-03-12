@@ -90,7 +90,7 @@ struct SockUtil
 	// debug
 	template <typename T> static void print(T *s)
 	{
-		char buf[64];
+		char buf[INET6_ADDRSTRLEN];
 		auto len = sizeof(buf);
 
 		if (!s) {

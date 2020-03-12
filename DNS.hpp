@@ -15,10 +15,11 @@ namespace mDNS
 namespace DNS
 {
 
+//
+// See e.g. https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml
+//
 struct Defs
 {
-	// See e.g. https://www.iana.org/assignments/dns-parameters/dns-parameters.xhtml
-
 	// Message header flag bitmasks; e.g. RFC1035:4.1.1
 	static constexpr uint16_t QRMask = 1 << 15;  // 0b1000000000000000
 	static constexpr uint16_t OpMask = 15 << 11; // 0b0111100000000000
@@ -158,19 +159,20 @@ struct Defs
 	static const char* Class(uint16_t k) { return get(Classes,k); }
 };
 
+//
+// Parse utilities - deserialization from network buffer
+//
 struct Parse
 {
+	// Endian conversions for common data types (16-, 32-, 64-bit).
 	template <typename T>
-	static T hton(const T& t)
+	static T ntoh(const T& t)
 	{
 		if (sizeof(T) == sizeof(uint16_t)) return htons(t);
 		if (sizeof(T) == sizeof(uint32_t)) return htonl(t);
 		if (sizeof(T) == sizeof(uint64_t)) return htonll(t);
 		return t;
 	}
-
-	template <typename T>
-	static T ntoh(const T& t) { return hton(t); }
 
 	template<typename T>
 	static size_t atom(const char *bytes, size_t i, size_t max_i, T& t, bool endian = true)
@@ -280,7 +282,7 @@ struct Parse
 };
 
 //
-// Lightweight wrapper around the source buffer.
+// DNS message resource record entry - just a lightweight wrapper around the source buffer.
 //
 struct ResourceRecord
 {
@@ -362,6 +364,9 @@ struct ResourceRecord
 	}
 };
 
+//
+// DNS message - just a lightweight wrapper around the source buffer.
+//
 struct Message
 {
 	// Message header ...
@@ -374,7 +379,7 @@ struct Message
 	uint16_t n_authority = 0;
 	uint16_t n_additional = 0;
 
-	// ... then message body follows in source buffer.
+	// ... then message body resource records follow in source buffer.
 
 	size_t read_header(const char* bytes, size_t i, size_t max_i)
 	{

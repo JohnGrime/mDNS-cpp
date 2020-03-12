@@ -2,6 +2,10 @@
 
 #include <unistd.h>
 
+#include <atomic>
+#include <csignal>
+#include <thread>
+
 using namespace mDNS;
 
 //
@@ -12,41 +16,20 @@ using namespace mDNS;
 // https://docs.oracle.com/cd/E19455-01/806-1017/6jab5di2e/index.html
 //
 
-void print_interface_info(const Interfaces::Interface& ifc)
-{
-	char buf[64];
-	auto len = sizeof(buf);
+namespace {
+	volatile std::sig_atomic_t gSignalStatus = 0;
 
-	printf("%s [%d]\n", ifc.name.c_str(), ifc.index);
-
-	for (const auto ifa : ifc.addresses) {
-
-		printf("  %s\n", SockUtil::af_str(ifa->ifa_addr));
-
-		printf("    ifa_flags: ");
-		for (auto &x : Interfaces::iff_flag_map) {
-			if (ifa->ifa_flags & x.first) printf("%s ", x.second.c_str());
-		}
-		printf("\n");
-
-		if (SockUtil::is_inet(ifa->ifa_addr)) {
-			printf("    ifa_addr: %s\n", SockUtil::ip_str(ifa->ifa_addr,buf,len));
-			printf("    ifa_netmask: %s\n", SockUtil::ip_str(ifa->ifa_netmask,buf,len));
-			printf("    ifa_broadaddr: %s\n", SockUtil::ip_str(ifa->ifa_broadaddr,buf,len));
-		}
-		else if (ifa->ifa_addr->sa_family == AF_PACKET) {
-			printf("    MAC: %s\n", SockUtil::mac_str(ifa->ifa_addr,buf,len));
-		}
-
-		printf("\n");
-	}		
+	void signal_handler(int signal)
+	{
+		gSignalStatus = signal;
+	}
 }
 
 void print_dns_rr(const DNS::ResourceRecord& rr, const char* buf, bool is_question)
 {
 	using Defs = DNS::Defs;
 
-	char b[64];
+	char b[INET6_ADDRSTRLEN];
 	std::vector<std::string> tmp;
 
 	printf("  {name=%s, type=%s (%d), class=%s (%d)} {TTL=%d rd_len=%d}",
@@ -105,115 +88,55 @@ void print_dns_rr(const DNS::ResourceRecord& rr, const char* buf, bool is_questi
 	printf( "}\n" );
 }
 
-int main(int argc, char **argv)
+void read_messages(int sd, int timeout_ms)
 {
-	using Defs = DNS::Defs;
-	using Listener = MulticastListener;
-
-	Interfaces ifcs;
-
 	DNS::Message msg;
 	DNS::ResourceRecord rr;
 
-	ifaddrs* ifa = nullptr;
+	// For timeout
+	fd_set fds;
+	struct timeval timeout;
 
-	// Incoming packets go in here.
+	// Used in receiving data
+	struct sockaddr_storage src, dst;
+	int ifc_idx;
+
+	// Incoming packet data goes in here.
 	std::vector<char> msg_buf_vec(66000);
 	char * const msg_buf = &msg_buf_vec[0];
 	const auto msg_buf_max = msg_buf_vec.size();
 
+	// Used in parsing/output.
+	char b[INET6_ADDRSTRLEN];
 	std::vector<std::string> tmp;
 
-	// Print all interfaces
-	if (argc<2) {
-		for (const auto& ifc : ifcs.interfaces) print_interface_info(ifc);
-		exit(0);
-	}
-
-	setbuf(stdout, nullptr);
-	setbuf(stderr, nullptr);
-
-	// Find specified interface via IP
+	while (gSignalStatus == 0)
 	{
-		auto receive_IP = argv[1];
-		auto ifc = ifcs.LookupByIP(receive_IP, &ifa);
-		if (!ifc) ERROR("IP '%s' not found.\n", receive_IP);
+		// Avoid system blocking in DatagramSocket::Read(): only proceed onto actual
+		// read where data available on socket.
 
-		printf("'%s' => '%s' %d\n", receive_IP, ifc->name.c_str(), ifc->index);
-		printf("Addresses associated with this interface:\n");
-		for (const auto ifa : ifc->addresses) SockUtil::print(ifa->ifa_addr);
-		printf("\n");
-	}
-
-	/*
-	// Print selected interfaces
-	if (false)
-	{
-		std::vector<const char *> v = {"en0","en1","nope"};
-
-		for (const auto x : v) {
-			auto ifc = ifcs.LookupByName(x);
-			if (!ifc) {
-				printf("interface '%s' not found.\n", x);
-				continue;
-			}
-			print_interface(*ifc);
-		}
-	}
-	*/
-
-	printf("here we go ... \n");
-
-	//
-	// Launch listener
-	//
-
-	int sd;
-
-	// Set up mDNS listener socket
-
-	{
-		auto sa = ifa->ifa_addr;
-		auto port = 5353;
-		auto IP = (sa->sa_family == AF_INET) ? "224.0.0.251" : "ff02::fb";
-
-		sd = Listener::CreateAndBind(sa->sa_family, port);
-		if (sd < 0) {
-			ERROR("Creation/bind failed (%s : %d).\n", IP, port);
+		if (timeout_ms>0) {
+			FD_ZERO(&fds);
+			FD_SET(sd, &fds);
+			timeout.tv_sec = timeout_ms / 1000;
+			timeout.tv_usec = (timeout_ms % 1000) * 1000;
+			auto r = select(FD_SETSIZE, &fds, nullptr, nullptr, &timeout);
+			if (r < 1) continue;
 		}
 
-		Listener::JoinMulticastGroup(sd, IP, ifa);
-	}
-
-	// Process incoming mDNS messages
-
-	while (true)
-	{
-		struct sockaddr_storage src, dst;
-		int index;
-
-		auto N = Listener::Read(sd, msg_buf, msg_buf_max, &src, &dst, &index);
-		if (N<0) ERROR("read()");
+		auto N = DatagramSocket::Read(sd, msg_buf, msg_buf_max, &src, &dst, &ifc_idx);
+		if (N<0) {
+			WARN("Listener::Read() returned %d", N);
+			continue;
+		}
 
 		// Print some packet information
 
-		{
-			char b[64];
-
-			printf("\n***********************\n");
-			printf("Read %d bytes\n", (int)N);
-			printf("%s => ", SockUtil::ip_str(&src, b, sizeof(b)));
-			printf("%s : ", SockUtil::ip_str(&dst, b, sizeof(b)));
-			printf("delivered_on=%d\n", index);
-		}
-
-		// Save packet
-
-		{
-			auto f = fopen("packet.data","w");
-			fwrite(msg_buf,N,1,f);
-			fclose(f);
-		}
+		printf("\n***********************\n");
+		printf("Read %d bytes\n", (int)N);
+		printf("%s => ", SockUtil::ip_str(&src, b, sizeof(b)));
+		printf("%s : ", SockUtil::ip_str(&dst, b, sizeof(b)));
+		printf("delivered_on=%d\n", ifc_idx);
 
 		// Get DNS header information
 
@@ -225,63 +148,180 @@ int main(int argc, char **argv)
 		// Print header info
 
 		printf("{id %d : flags (%d)", msg.id, msg.flags);
-		for (const auto& it : Defs::HeaderFlags) {
+		for (const auto& it : DNS::Defs::HeaderFlags) {
 			if (msg.flags & it.first) printf(" %s", it.second.c_str());
 		}
 		printf("}\n");
 
 		// Print resource record sections
 
-		printf("Questions:\n");
-		for (auto ii=0; ii<msg.n_question; ii++) {
-			i = rr.read_header(msg_buf, i, N, tmp);
-			if (i==0) break;
+		const char* sections[] = {"Questions", "Answers", "Authority", "Additional"};
+		int counts[] = {msg.n_question, msg.n_answer, msg.n_authority, msg.n_additional};
 
-			print_dns_rr(rr, msg_buf, true);
-		}
-		if (i == 0) {
-			printf("Problem parsing section.\n");
-			continue;
-		}
+		for (int sec_i=0; sec_i<4; sec_i++) {
+			printf("%s:\n", sections[sec_i]);
+			for (auto rr_i=0; rr_i<counts[sec_i]; rr_i++) {
+				i = rr.read_header(msg_buf, i, N, tmp);
+				if (i==0) break;
 
-		printf("Answers:\n");
-		for (auto ii=0; ii<msg.n_answer; ii++) {
-			i = rr.read_header_and_body(msg_buf, i, N, tmp);
-			if (i==0) break;
-
-			print_dns_rr(rr, msg_buf, false);
-		}
-		if (i == 0) {
-			printf("Problem parsing section.\n");
-			continue;
-		}
-
-		printf("Authority:\n");
-		for (auto ii=0; ii<msg.n_authority; ii++) {
-			i = rr.read_header_and_body(msg_buf, i, N, tmp);
-			if (i==0) break;
-
-			print_dns_rr(rr, msg_buf, false);
-		}
-		if (i == 0) {
-			printf("Problem parsing section.\n");
-			continue;
-		}
-
-		printf("Additional:\n");
-		for (auto ii=0; ii<msg.n_additional; ii++) {
-			i = rr.read_header_and_body(msg_buf, i, N, tmp);
-			if (i==0) break;
-
-			print_dns_rr(rr, msg_buf, false);
-		}
-		if (i == 0) {
-			printf("Problem parsing section.\n");
-			continue;
+				print_dns_rr(rr, msg_buf, true);
+			}
+			if (i == 0) {
+				printf("Problem parsing section.\n");
+				break;
+			}
 		}
 
 		printf("\n");
+	}	
+}
+
+int main(int argc, char **argv)
+{
+//	using Defs = DNS::Defs;
+	using Listener = DatagramSocket;
+
+	Interfaces ifcs;
+
+	int timeout_ms = 100;
+	std::vector<ifaddrs *> ifaddrs4, ifaddrs6;
+
+	// Avoid warnings appearing out-of-order relative to normal output
+
+	setbuf(stdout, nullptr);
+	setbuf(stderr, nullptr);
+
+	// If no arguments, print all interfaces
+
+	if (argc<2) {
+		for (const auto& ifc : ifcs.interfaces) Interfaces::print_(ifc);
+		exit(0);
 	}
 
-	close(sd);
+	// Args may be interface names or IP addresses; test in that order.
+
+	for (int i=1; i<argc; i++ )
+	{
+		ifaddrs* ifa = nullptr;
+
+		// Is this a valid interface name?
+		if (auto ifc = ifcs.LookupByName(argv[i])) {
+			printf("'%s' => interface (%d)\n", argv[i], ifc->index);
+			for (const auto ifa : ifc->addresses) {
+				auto sa = ifa->ifa_addr;
+
+				if (!SockUtil::is_inet(sa)) {
+					continue;
+				}
+
+				if (sa->sa_family == AF_INET) {
+					ifaddrs4.push_back(ifa);
+				}
+				else {
+					ifaddrs6.push_back(ifa);
+				} 
+			}
+		}
+		// Is this a valid IP address?
+		else if (auto ifc = ifcs.LookupByIP(argv[i], &ifa)) {
+			auto sa = ifa->ifa_addr;
+
+			if (sa->sa_family == AF_INET) {
+				printf("'%s' => IPv4 on %s (%d).\n", argv[i], ifc->name.c_str(), ifc->index);
+				ifaddrs4.push_back(ifa);
+			}
+			else {
+				printf("'%s' => IPv6 on %s (%d).\n", argv[i], ifc->name.c_str(), ifc->index);
+				ifaddrs6.push_back(ifa);
+			}
+		}
+		// This is not recognised.
+		else
+		{
+			printf("'%s' is not an interface name or assigned address.\n", argv[i]);
+		}
+	}
+
+	if ((ifaddrs4.size()==0) && (ifaddrs6.size()==0)) {
+		ERROR("No valid interfaces or addresses specified.\n");
+	}
+
+	// Signal handler; signal() deprecated, use sigaction() if possible.
+
+	{
+		const auto signal_type = SIGINT;
+		struct sigaction new_action;
+
+		if (sigemptyset(&new_action.sa_mask) != 0) {
+			ERROR("sigemptyset()");
+		}
+		
+		new_action.sa_handler = signal_handler;
+		new_action.sa_flags = 0;
+
+		// Allow signal to interrupt system routines like recvmsg
+		//if (siginterrupt(signal_type,1) != 0 ) ERROR("siginterrupt()");			
+
+		// Install new handler
+		if (sigaction(signal_type, &new_action, nullptr) != 0) {
+			ERROR("sigaction()");
+		}
+	}
+
+	// IPv4 mDNS listener thread
+
+	std::thread thread4( [&ifaddrs4,timeout_ms] {
+		auto port = 5353;
+		auto IP = "224.0.0.251";
+
+		int sd = Listener::CreateAndBind(AF_INET, port);
+		if (sd < 0) {
+			ERROR("Creation/bind failed (%s : %d).\n", IP, port);
+		}
+
+		for (const auto& ifa : ifaddrs4) {
+			Listener::JoinMulticastGroup(sd, IP, ifa);			
+		}
+//		Listener::JoinMulticastGroup(sd, IP);
+
+		read_messages(sd,timeout_ms);
+
+		printf("thread4 loop ended.\n");
+
+		close(sd);
+	});
+
+	// IPv6 mDNS listener thread
+
+	std::thread thread6( [&ifaddrs6,timeout_ms] {
+		auto port = 5353;
+		auto IP = "ff02::fb";
+
+		int sd = Listener::CreateAndBind(AF_INET6, port);
+		if (sd < 0) {
+			ERROR("Creation/bind failed (%s : %d).\n", IP, port);
+		}
+
+		for (const auto& ifa : ifaddrs6) {
+			Listener::JoinMulticastGroup(sd, IP, ifa);			
+		}
+//		Listener::JoinMulticastGroup(sd, IP);
+
+		read_messages(sd,timeout_ms);
+
+		printf("thread6 loop ended.\n");
+
+		close(sd);
+	});
+
+	// Just wait for threads to exit.
+
+	thread4.join();
+	printf("Joined thread4\n");
+
+	thread6.join();
+	printf("Joined thread6\n");
+
+	printf("done\n");
+
 }
