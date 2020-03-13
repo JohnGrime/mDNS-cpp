@@ -18,6 +18,7 @@ using namespace mDNS;
 
 namespace {
 	volatile std::sig_atomic_t gSignalStatus = 0;
+	std::mutex print_mutex;
 
 	void signal_handler(int signal)
 	{
@@ -130,49 +131,59 @@ void read_messages(int sd, int timeout_ms)
 			continue;
 		}
 
+
 		// Print some packet information
 
-		printf("\n***********************\n");
-		printf("Read %d bytes\n", (int)N);
-		printf("%s => ", SockUtil::ip_str(&src, b, sizeof(b)));
-		printf("%s : ", SockUtil::ip_str(&dst, b, sizeof(b)));
-		printf("delivered_on=%d\n", ifc_idx);
+		{
+			std::lock_guard<std::mutex> lock(print_mutex);
 
-		// Get DNS header information
+			printf("\n***********************\n");
+			printf("Read %d bytes\n", (int)N);
+			printf("%s => ", SockUtil::ip_str(&src, b, sizeof(b)));
+			printf("%s : ", SockUtil::ip_str(&dst, b, sizeof(b)));
+			printf("delivered_on=%d\n", ifc_idx);
 
-		size_t i = msg.read_header(msg_buf, 0, N);
-		if (i == 0) {
-			continue;
-		}
+			// Get DNS header information
 
-		// Print header info
-
-		printf("{id %d : flags (%d)", msg.id, msg.flags);
-		for (const auto& it : DNS::Defs::HeaderFlags) {
-			if (msg.flags & it.first) printf(" %s", it.second.c_str());
-		}
-		printf("}\n");
-
-		// Print resource record sections
-
-		const char* sections[] = {"Questions", "Answers", "Authority", "Additional"};
-		int counts[] = {msg.n_question, msg.n_answer, msg.n_authority, msg.n_additional};
-
-		for (int sec_i=0; sec_i<4; sec_i++) {
-			printf("%s:\n", sections[sec_i]);
-			for (auto rr_i=0; rr_i<counts[sec_i]; rr_i++) {
-				i = rr.read_header(msg_buf, i, N, tmp);
-				if (i==0) break;
-
-				print_dns_rr(rr, msg_buf, true);
-			}
+			size_t i = msg.read_header(msg_buf, 0, N);
 			if (i == 0) {
-				printf("Problem parsing section.\n");
-				break;
+				continue;
 			}
-		}
 
-		printf("\n");
+			// Print header info
+
+			printf("{id %d : flags (%d)", msg.id, msg.flags);
+			for (const auto& it : DNS::Defs::HeaderFlags) {
+				if (msg.flags & it.first) printf(" %s", it.second.c_str());
+			}
+			printf("}\n");
+
+			// Print resource record sections
+
+			const char* sections[] = {
+				"Questions", "Answers", "Authority", "Additional"
+			};
+
+			int counts[] = {
+				msg.n_question, msg.n_answer, msg.n_authority, msg.n_additional
+			};
+
+			for (int sec_i=0; sec_i<4; sec_i++) {
+				printf("%s:\n", sections[sec_i]);
+				for (auto rr_i=0; rr_i<counts[sec_i]; rr_i++) {
+					i = rr.read_header(msg_buf, i, N, tmp);
+					if (i==0) break;
+
+					print_dns_rr(rr, msg_buf, true);
+				}
+				if (i == 0) {
+					printf("Problem parsing section.\n");
+					break;
+				}
+			}
+			
+			printf("\n");
+		}
 	}	
 }
 
