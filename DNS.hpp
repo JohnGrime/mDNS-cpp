@@ -164,15 +164,25 @@ struct Defs
 //
 struct Parse
 {
-	// Endian conversions for common data types (16-, 32-, 64-bit).
+	// Endian conversion for arbitrary integral data type
 	template <typename T>
 	static T ntoh(const T& t)
 	{
-		if (sizeof(T) == sizeof(uint16_t)) return htons(t);
-		if (sizeof(T) == sizeof(uint32_t)) return htonl(t);
-		if (sizeof(T) == sizeof(uint64_t)) return htonll(t);
-		return t;
+		static const uint16_t one = 1;
+		static const bool do_swap = (((const char *)&one)[0] == 1);
+		
+		if (!do_swap) return t;
+
+		constexpr size_t N = sizeof(T);
+		T t_;
+
+		for (size_t i=0; i<N; i++) {
+			((char *)&t_)[N-(1+i)] = ((char *)&t)[i];
+		}
+
+		return t_;
 	}
+
 
 	template<typename T>
 	static size_t atom(const char *bytes, size_t i, size_t max_i, T& t, bool endian = true)

@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <csignal>
+#include <mutex>
 #include <thread>
 
 using namespace mDNS;
@@ -89,12 +90,12 @@ void print_dns_rr(const DNS::ResourceRecord& rr, const char* buf, bool is_questi
 	printf( "}\n" );
 }
 
-void read_messages(int sd, int timeout_ms)
+void read_messages(int sd, int timeout_ms, volatile std::sig_atomic_t& status)
 {
 	DNS::Message msg;
 	DNS::ResourceRecord rr;
 
-	// For timeout
+	// Timeout
 	fd_set fds;
 	struct timeval timeout;
 
@@ -111,7 +112,7 @@ void read_messages(int sd, int timeout_ms)
 	char b[INET6_ADDRSTRLEN];
 	std::vector<std::string> tmp;
 
-	while (gSignalStatus == 0)
+	while (status == 0)
 	{
 		// Avoid system blocking in DatagramSocket::Read(): only proceed onto actual
 		// read where data available on socket.
@@ -160,28 +161,46 @@ void read_messages(int sd, int timeout_ms)
 
 			// Print resource record sections
 
+			printf("Questions:\n");
+
+			for (auto rr_i=0; rr_i<msg.n_question; rr_i++) {
+				i = rr.read_header(msg_buf, i, N, tmp);
+				if (i == 0) {
+					printf("Problem parsing record.\n");
+					break;
+				}
+				print_dns_rr(rr, msg_buf, true);
+			}
+			if (i == 0) {
+				printf("Problem parsing section.\n");
+				continue;
+			}
+
 			const char* sections[] = {
-				"Questions", "Answers", "Authority", "Additional"
+				"Answers", "Authority", "Additional"
 			};
 
 			int counts[] = {
-				msg.n_question, msg.n_answer, msg.n_authority, msg.n_additional
+				msg.n_answer, msg.n_authority, msg.n_additional
 			};
 
-			for (int sec_i=0; sec_i<4; sec_i++) {
+			for (int sec_i=0; sec_i<3; sec_i++) {
 				printf("%s:\n", sections[sec_i]);
 				for (auto rr_i=0; rr_i<counts[sec_i]; rr_i++) {
-					i = rr.read_header(msg_buf, i, N, tmp);
-					if (i==0) break;
+					i = rr.read_header_and_body(msg_buf, i, N, tmp);
+					if (i==0) {
+						printf("Problem parsing record.\n");
+						break;
+					}
 
-					print_dns_rr(rr, msg_buf, true);
+					print_dns_rr(rr, msg_buf, false);
 				}
 				if (i == 0) {
 					printf("Problem parsing section.\n");
 					break;
 				}
 			}
-			
+
 			printf("\n");
 		}
 	}	
@@ -189,7 +208,6 @@ void read_messages(int sd, int timeout_ms)
 
 int main(int argc, char **argv)
 {
-//	using Defs = DNS::Defs;
 	using Listener = DatagramSocket;
 
 	Interfaces ifcs;
@@ -285,6 +303,8 @@ int main(int argc, char **argv)
 		auto port = 5353;
 		auto IP = "224.0.0.251";
 
+		if (ifaddrs4.size()<1) return;
+
 		int sd = Listener::CreateAndBind(AF_INET, port);
 		if (sd < 0) {
 			ERROR("Creation/bind failed (%s : %d).\n", IP, port);
@@ -295,7 +315,7 @@ int main(int argc, char **argv)
 		}
 //		Listener::JoinMulticastGroup(sd, IP);
 
-		read_messages(sd,timeout_ms);
+		read_messages(sd, timeout_ms, gSignalStatus);
 
 		printf("thread4 loop ended.\n");
 
@@ -308,6 +328,8 @@ int main(int argc, char **argv)
 		auto port = 5353;
 		auto IP = "ff02::fb";
 
+		if (ifaddrs6.size()<1) return;
+
 		int sd = Listener::CreateAndBind(AF_INET6, port);
 		if (sd < 0) {
 			ERROR("Creation/bind failed (%s : %d).\n", IP, port);
@@ -318,7 +340,7 @@ int main(int argc, char **argv)
 		}
 //		Listener::JoinMulticastGroup(sd, IP);
 
-		read_messages(sd,timeout_ms);
+		read_messages(sd, timeout_ms, gSignalStatus);
 
 		printf("thread6 loop ended.\n");
 

@@ -6,10 +6,20 @@
 
 #include <sys/socket.h>
 #include <arpa/inet.h>
-#include <net/if_dl.h> //LLADDR()
 
 #include <map>
 #include <string>
+
+// Extracting MAC address from packet/link is platform dependent.
+
+#if __APPLE__
+	#include <net/if_dl.h> // sockaddr_dl, LLADDR()
+	#define LLADDR_(sa) LLADDR((struct sockaddr_dl*)sa)
+#elif __linux__
+	#include <linux/if_packet.h> // sockaddr_ll
+	#define LLADDR_(sa) (((struct sockaddr_ll*)sa)->sll_addr)
+#endif
+
 
 namespace mDNS
 {
@@ -62,14 +72,15 @@ struct SockUtil
 	// MAC address (AF_PACKET family type)
 	template <typename T> static const char* mac_str(T *s, char *buf, size_t len)
 	{
+		const auto fmt = "%02x:%02x:%02x:%02x:%02x:%02x";
+
 		if (!s || ((ss *)s)->ss_family != AF_PACKET) return nullptr;
 		if (!buf || len<18) {
 			WARN("Bad buffer; %p, len %d\n", buf, (int)len);
 			return nullptr;
 		}
 
-		const auto fmt = "%02x:%02x:%02x:%02x:%02x:%02x";
-		const auto x = (unsigned char *)LLADDR((struct sockaddr_dl *)s);
+		const auto x = (unsigned char *)LLADDR_(s);
 		sprintf(buf, fmt, x[0], x[1], x[2], x[3], x[4], x[5]);
 		return buf;
 	}
@@ -103,5 +114,7 @@ struct SockUtil
 };
 
 }
+
+#undef LLADDR_
 
 #endif
