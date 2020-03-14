@@ -2,7 +2,7 @@
 
 #define MDNS_SOCKUTIL
 
-#include "defs.hpp" // must come before any inet headers!
+#include "defs.hpp" // should come before any inet headers etc
 
 #include <sys/socket.h>
 #include <arpa/inet.h>

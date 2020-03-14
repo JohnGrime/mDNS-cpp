@@ -2,9 +2,8 @@
 
 #define MDNS_DNS
 
-#include "defs.hpp" // must come first!
+#include "defs.hpp" // should come before any inet headers etc
 
-#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -79,8 +78,6 @@ struct Defs
 
 	// Classes, "no obsolete" ;) RFC1035:3.2.4
 	static constexpr uint16_t IN = 1;
-
-	template <typename T> using NameMap = std::map<T,std::string>;
 
 	#define _(txt) {txt, #txt}
 		inline static const NameMap<uint16_t> HeaderFlags = {

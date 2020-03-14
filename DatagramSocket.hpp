@@ -2,7 +2,7 @@
 
 #define MDNS_DATAGRAMSOCKET
 
-#include "defs.hpp" // must come first!
+#include "defs.hpp" // should come before any inet headers etc
 
 #include <net/if.h>  // if_nametoindex()
 

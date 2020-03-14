@@ -2,7 +2,7 @@
 
 #define MDNS_INTERFACES
 
-#include "defs.hpp" // must come before any inet headers!
+#include "defs.hpp" // should come before any inet headers etc
 
 #include <ifaddrs.h> // getifaddrs(), freeifaddrs()
 #include <net/if.h>  // IFF_<x>, if_nametoindex(), if_indextoname()
@@ -100,7 +100,7 @@ struct Interfaces
 	}
 
 	//
-	// Slow methods - avoid where possible!
+	// Slow methods - cache results where possible
 	//
 	
 	const Interface* LookupByName(const char *name)

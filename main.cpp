@@ -1,4 +1,4 @@
-#include "mDNS.hpp" // include before anything else!
+#include "mDNS.hpp" // should come before any inet headers etc
 
 #include <unistd.h>
 

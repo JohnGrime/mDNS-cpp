@@ -2,7 +2,7 @@
 
 #define MDNS_HEADER
 
-#include "defs.hpp"
+#include "defs.hpp" // should come before any inet headers etc
 
 #include "SockUtil.hpp"
 #include "Interfaces.hpp"
