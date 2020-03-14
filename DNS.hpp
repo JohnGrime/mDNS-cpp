@@ -369,8 +369,6 @@ struct ResourceRecord
 		}
 
 		return i;
-
-		return i;
 	}
 };
 

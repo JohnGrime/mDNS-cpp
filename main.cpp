@@ -21,15 +21,37 @@ using namespace mDNS;
 
 namespace {
 
+// Simple wrapper for select() on set of file descriptors with a timeout.
+
+struct TimeoutSelect
+{
+	fd_set fds;
+	struct timeval tv;
+
+	int Select(int timeout_ms, std::initializer_list<int> const& descriptors)
+	{
+		FD_ZERO(&fds);
+		for (auto d: descriptors) { FD_SET(d, &fds); }
+		tv.tv_sec = timeout_ms / 1000;
+		tv.tv_usec = (timeout_ms % 1000) * 1000;
+		return select(FD_SETSIZE, &fds, nullptr, nullptr, &tv);
+	}
+};
+
+// Thread control variables
+
 volatile std::sig_atomic_t gSignalStatus = 0;
-std::mutex print_mutex;
+
+// Catch SIGINT etc
 
 void signal_handler(int signal)
 {
 	gSignalStatus = signal;
 }
 
-void print_dns_rr(const DNS::ResourceRecord& rr, const char* buf, bool is_question)
+// Debug print routines
+
+void print_dns_rr(const DNS::ResourceRecord& rr,const char* msg_buf, bool is_question)
 {
 	using Defs = DNS::Defs;
 
@@ -55,15 +77,15 @@ void print_dns_rr(const DNS::ResourceRecord& rr, const char* buf, bool is_questi
 	printf( " { " );
 	switch (rr.type) {
 		case Defs::A:
-			printf("%s ", inet_ntop(AF_INET, &buf[i], b, sizeof(b)) );
+			printf("%s ", inet_ntop(AF_INET, &msg_buf[i], b, sizeof(b)) );
 		break;
 
 		case Defs::AAAA:
-			printf("%s ", inet_ntop(AF_INET6, &buf[i], b, sizeof(b)) );
+			printf("%s ", inet_ntop(AF_INET6, &msg_buf[i], b, sizeof(b)) );
 		break;
 
 		case Defs::PTR:
-			DNS::Parse::labels(buf, i, max_i, true, true, tmp);
+			DNS::Parse::labels(msg_buf, i, max_i, true, true, tmp);
 
 			for (const auto& str: tmp) printf("%s.", str.c_str());
 				printf(" ");
@@ -73,11 +95,11 @@ void print_dns_rr(const DNS::ResourceRecord& rr, const char* buf, bool is_questi
 		{
 			uint16_t priority, weight, port;
 
-			i = DNS::Parse::atom(buf, i, max_i, priority);
-			i = DNS::Parse::atom(buf, i, max_i, weight);
-			i = DNS::Parse::atom(buf, i, max_i, port);
+			i = DNS::Parse::atom(msg_buf, i, max_i, priority);
+			i = DNS::Parse::atom(msg_buf, i, max_i, weight);
+			i = DNS::Parse::atom(msg_buf, i, max_i, port);
 
-			DNS::Parse::labels(buf, i, max_i, true, true, tmp);
+			DNS::Parse::labels(msg_buf, i, max_i, true, true, tmp);
 
 			for (const auto& str: tmp) printf("%s.", str.c_str());
 			printf(" priority=%d weight=%d port=%d ", priority, weight, port);
@@ -85,7 +107,7 @@ void print_dns_rr(const DNS::ResourceRecord& rr, const char* buf, bool is_questi
 		break;
 
 		case Defs::TXT:
-			DNS::Parse::labels(buf, i, max_i, true, false, tmp);
+			DNS::Parse::labels(msg_buf, i, max_i, true, false, tmp);
 			for (const auto& str: tmp) printf("'%s' ", str.c_str());
 		break;
 	}
@@ -94,15 +116,13 @@ void print_dns_rr(const DNS::ResourceRecord& rr, const char* buf, bool is_questi
 
 void print_dns_msg(
 	const char *msg_buf, int msg_buflen,
-	DatagramSocket::Meta* meta = nullptr )
+	DatagramSocket::Meta* meta = nullptr)
 {
 	DNS::Message msg;
 	DNS::ResourceRecord rr;
 
 	char b[INET6_ADDRSTRLEN];
 	std::vector<std::string> tmp;
-
-	std::lock_guard<std::mutex> lock(print_mutex);
 
 	printf("\n***********************\n");
 	printf("Read %d bytes\n", (int)msg_buflen);
@@ -160,28 +180,14 @@ void print_dns_msg(
 
 }
 
-// Simple wrapper for select() on set of file descriptors with a timeout.
-
-struct TimeoutSelect
-{
-	fd_set fds;
-	struct timeval tv;
-
-	int Select(int timeout_ms, std::initializer_list<int> const& descriptors)
-	{
-		FD_ZERO(&fds);
-		for (auto d: descriptors) { FD_SET(d, &fds); }
-		tv.tv_sec = timeout_ms / 1000;
-		tv.tv_usec = (timeout_ms % 1000) * 1000;
-		return select(FD_SETSIZE, &fds, nullptr, nullptr, &tv);
-	}
-};
+// IPv4/6 threads call this to collect and print messages
 
 void read_messages(
 	int family, int port, const char *IP,
 	const std::vector<ifaddrs *>* ifa_vec,
 	int timeout_ms,
-	volatile std::sig_atomic_t& status)
+	volatile std::sig_atomic_t& status,
+	std::mutex* print_mutex = nullptr)
 {
 	TimeoutSelect ts;
 	DatagramSocket::Meta meta;
@@ -216,7 +222,14 @@ void read_messages(
 			continue;
 		}
 
-		print_dns_msg(&msg_buf[0], N, &meta);
+		// Avoids intermingled output
+		if (print_mutex) {
+			std::lock_guard<std::mutex> lock(*print_mutex);
+			print_dns_msg(&msg_buf[0], N, &meta);
+		}
+		else {
+			print_dns_msg(&msg_buf[0], N, &meta);
+		}
 	}
 
 	close(sd);
@@ -228,6 +241,8 @@ int main(int argc, char **argv)
 
 	int timeout_ms = 100;
 	std::vector<ifaddrs *> ifaddrs4, ifaddrs6;
+
+	std::mutex print_mutex;
 
 	// Avoid warnings/errors appearing out-of-order relative to normal output
 
@@ -314,22 +329,22 @@ int main(int argc, char **argv)
 
 	// IPv4 mDNS listener thread
 
-	std::thread thread4( [&ifaddrs4,timeout_ms] {
+	std::thread thread4( [&ifaddrs4,timeout_ms,&print_mutex] {
 		auto port = 5353;
 		auto IP = "224.0.0.251";
 
 		if (ifaddrs4.size()<1) return;
-		read_messages(AF_INET, port, IP, &ifaddrs4, timeout_ms, gSignalStatus);
+		read_messages(AF_INET, port, IP, &ifaddrs4, timeout_ms, gSignalStatus, &print_mutex);
 	});
 
 	// IPv6 mDNS listener thread
 
-	std::thread thread6( [&ifaddrs6,timeout_ms] {
+	std::thread thread6( [&ifaddrs6,timeout_ms,&print_mutex] {
 		auto port = 5353;
 		auto IP = "ff02::fb";
 
 		if (ifaddrs6.size()<1) return;
-		read_messages(AF_INET6, port, IP, &ifaddrs6, timeout_ms, gSignalStatus);
+		read_messages(AF_INET6, port, IP, &ifaddrs6, timeout_ms, gSignalStatus, &print_mutex);
 	});
 
 	// Just wait for threads to exit.

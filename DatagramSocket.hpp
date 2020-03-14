@@ -258,6 +258,10 @@ struct DatagramSocket
 			return result;
 		}
 
+		if (mh.msg_controllen == sizeof(meta.tmp)) {
+			WARN("metadata is potentially truncated");
+		}
+
 		for (struct cmsghdr* c = CMSG_FIRSTHDR(&mh); c!=NULL; c = CMSG_NXTHDR(&mh,c))
 		{
 			auto lvl = c->cmsg_level;
