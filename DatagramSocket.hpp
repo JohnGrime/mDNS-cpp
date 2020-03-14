@@ -26,6 +26,14 @@ namespace mDNS
 //
 struct DatagramSocket
 {
+	// Datagram metadata: source and destination addresses, index of interface
+	// on which the datagram was received (also temp. buffer for collection).
+	struct Meta {
+		char tmp[1024]; // temporary buffer for metadata
+		sockaddr_storage src, dst;
+		int ifc_idx;
+	};
+
 	static const char * check_(int family)
 	{
 		if (family == AF_INET) return "AF_INET";
@@ -139,6 +147,12 @@ struct DatagramSocket
 	// This means an interface number or IP address alone may not uniquely
 	// specify a specific address/interface on which to receive multicast
 	// packets. An ifaddrs structure is *not* ambiguous!
+	//
+	// If ifa == nullptr, join on any/default interface(s).
+	//
+	// Note: if another process has already joined the multicast group on this
+	// interface (Bonjour, Avahi etc), we may already be receiving multicasts
+	// without needing to call this - but call it in case we're the first!
 	static void JoinMulticastGroup(int sd, const char *mcast_ip, const ifaddrs *ifa = nullptr)
 	{
 		struct sockaddr sa;
@@ -210,16 +224,15 @@ struct DatagramSocket
 
 	//
 	// Read from socket, acquiring information about the data source and local interface/IP.
-	// Only family and address regions of dst are valid after call!
+	// Only family and address regions of metadata dst are valid after call!
 	//
-	static int Read(int sd, void *buf, size_t len, struct sockaddr_storage *src, struct sockaddr_storage *dst, int *ifc_idx = nullptr)
+	static int Read(int sd, void *buf, size_t len, Meta& meta)
 	{
-		char extra[1024];
+		if (!buf || (len<1)) return -1;
 
-		if (!src || !dst) return -1;
-
-		memset(src, 0, sizeof(*src));
-		memset(dst, 0, sizeof(*dst));
+		memset(&meta.src, 0, sizeof(meta.src));
+		memset(&meta.dst, 0, sizeof(meta.dst));
+		meta.ifc_idx = 0;
 
 		struct iovec iov;
 		{
@@ -229,14 +242,14 @@ struct DatagramSocket
 
 		struct msghdr mh;
 		{
-			mh.msg_name = src;
-			mh.msg_namelen = sizeof(*src);
+			mh.msg_name = &meta.src;
+			mh.msg_namelen = sizeof(meta.src);
 
 			mh.msg_iov = &iov;
 			mh.msg_iovlen = 1;
 
-			mh.msg_control = extra;
-			mh.msg_controllen = sizeof(extra);
+			mh.msg_control = meta.tmp;
+			mh.msg_controllen = sizeof(meta.tmp);
 		}
 
 		auto result = recvmsg(sd, &mh, 0);
@@ -255,9 +268,9 @@ struct DatagramSocket
 				auto index = pi->ipi_ifindex;
 				auto addr_ptr = &pi->ipi_addr;
 
-				dst->ss_family = AF_INET;
-				memcpy(SockUtil::inet4(dst), addr_ptr, sizeof(*addr_ptr));
-				if (ifc_idx) *ifc_idx = index;
+				meta.dst.ss_family = AF_INET;
+				memcpy(SockUtil::inet4(&meta.dst), addr_ptr, sizeof(*addr_ptr));
+				meta.ifc_idx = index;
 
 				break;
 			}
@@ -267,9 +280,9 @@ struct DatagramSocket
 				auto index = pi->ipi6_ifindex;
 				auto addr_ptr = &pi->ipi6_addr;
 
-				dst->ss_family = AF_INET6;
-				memcpy(SockUtil::inet6(dst), addr_ptr, sizeof(*addr_ptr));
-				if (ifc_idx) *ifc_idx = index;
+				meta.dst.ss_family = AF_INET6;
+				memcpy(SockUtil::inet6(&meta.dst), addr_ptr, sizeof(*addr_ptr));
+				meta.ifc_idx = index;
 
 				break;
 			}
@@ -277,7 +290,6 @@ struct DatagramSocket
 
 		return result;
 	}
-
 };
 
 

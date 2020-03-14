@@ -17,14 +17,16 @@ using namespace mDNS;
 // https://docs.oracle.com/cd/E19455-01/806-1017/6jab5di2e/index.html
 //
 
-namespace {
-	volatile std::sig_atomic_t gSignalStatus = 0;
-	std::mutex print_mutex;
+// Anonymous namespace with various local junk.
 
-	void signal_handler(int signal)
-	{
-		gSignalStatus = signal;
-	}
+namespace {
+
+volatile std::sig_atomic_t gSignalStatus = 0;
+std::mutex print_mutex;
+
+void signal_handler(int signal)
+{
+	gSignalStatus = signal;
 }
 
 void print_dns_rr(const DNS::ResourceRecord& rr, const char* buf, bool is_question)
@@ -90,132 +92,144 @@ void print_dns_rr(const DNS::ResourceRecord& rr, const char* buf, bool is_questi
 	printf( "}\n" );
 }
 
-void read_messages(int sd, int timeout_ms, volatile std::sig_atomic_t& status)
+void print_dns_msg(
+	const char *msg_buf, int msg_buflen,
+	DatagramSocket::Meta* meta = nullptr )
 {
 	DNS::Message msg;
 	DNS::ResourceRecord rr;
 
-	// Timeout
-	fd_set fds;
-	struct timeval timeout;
-
-	// Used in receiving data
-	struct sockaddr_storage src, dst;
-	int ifc_idx;
-
-	// Incoming packet data goes in here.
-	std::vector<char> msg_buf_vec(66000);
-	char * const msg_buf = &msg_buf_vec[0];
-	const auto msg_buf_max = msg_buf_vec.size();
-
-	// Used in parsing/output.
 	char b[INET6_ADDRSTRLEN];
 	std::vector<std::string> tmp;
 
-	while (status == 0)
-	{
-		// Avoid system blocking in DatagramSocket::Read(): only proceed onto actual
-		// read where data available on socket.
+	std::lock_guard<std::mutex> lock(print_mutex);
 
-		if (timeout_ms>0) {
-			FD_ZERO(&fds);
-			FD_SET(sd, &fds);
-			timeout.tv_sec = timeout_ms / 1000;
-			timeout.tv_usec = (timeout_ms % 1000) * 1000;
-			auto r = select(FD_SETSIZE, &fds, nullptr, nullptr, &timeout);
-			if (r < 1) continue;
+	printf("\n***********************\n");
+	printf("Read %d bytes\n", (int)msg_buflen);
+	if (meta) {
+		printf("%s => ", SockUtil::ip_str(&meta->src, b, sizeof(b)));
+		printf("%s : ", SockUtil::ip_str(&meta->dst, b, sizeof(b)));
+		printf("delivered_on=%d\n", meta->ifc_idx);
+	}
+
+	// Get DNS header information
+
+	size_t i = msg.read_header(msg_buf, 0, msg_buflen);
+	if (i == 0) {
+		return;
+	}
+
+	// Print header info
+
+	printf("{id %d : flags (%d)", msg.id, msg.flags);
+	for (const auto& it : DNS::Defs::HeaderFlags) {
+		if (msg.flags & it.first) printf(" %s", it.second.c_str());
+	}
+	printf("}\n");
+
+	// Print resource record sections
+
+	printf("Questions:\n");
+
+	for (auto rr_i=0; rr_i<msg.n_question; rr_i++) {
+		i = rr.read_header(msg_buf, i, msg_buflen, tmp);
+		if (i == 0) {
+			printf("Problem parsing record.\n");
+			return;
 		}
+		print_dns_rr(rr, msg_buf, true);
+	}
 
-		auto N = DatagramSocket::Read(sd, msg_buf, msg_buf_max, &src, &dst, &ifc_idx);
+	const char* sections[] = { "Answers", "Authority", "Additional" };
+	int counts[] = { msg.n_answer, msg.n_authority, msg.n_additional };
+
+	for (int sec_i=0; sec_i<3; sec_i++) {
+		printf("%s:\n", sections[sec_i]);
+		for (auto rr_i=0; rr_i<counts[sec_i]; rr_i++) {
+			i = rr.read_header_and_body(msg_buf, i, msg_buflen, tmp);
+			if (i==0) {
+				printf("Problem parsing record.\n");
+				return;
+			}
+			print_dns_rr(rr, msg_buf, false);
+		}
+	}
+
+	printf("\n");	
+}
+
+}
+
+// Simple wrapper for select() on set of file descriptors with a timeout.
+
+struct TimeoutSelect
+{
+	fd_set fds;
+	struct timeval tv;
+
+	int Select(int timeout_ms, std::initializer_list<int> const& descriptors)
+	{
+		FD_ZERO(&fds);
+		for (auto d: descriptors) { FD_SET(d, &fds); }
+		tv.tv_sec = timeout_ms / 1000;
+		tv.tv_usec = (timeout_ms % 1000) * 1000;
+		return select(FD_SETSIZE, &fds, nullptr, nullptr, &tv);
+	}
+};
+
+void read_messages(
+	int family, int port, const char *IP,
+	const std::vector<ifaddrs *>* ifa_vec,
+	int timeout_ms,
+	volatile std::sig_atomic_t& status)
+{
+	TimeoutSelect ts;
+	DatagramSocket::Meta meta;
+
+	std::vector<char> msg_buf(66000);
+
+	if (!IP) return;
+	if (ifa_vec && ifa_vec->size()<1) return;
+
+	int sd = DatagramSocket::CreateAndBind(family, port);
+	if (sd < 0) {
+		ERROR("Creation/bind failed (%s : %d).\n", IP, port);
+	}
+
+	// See note in DatagramSocket::JoinMulticastInterface()
+	if (ifa_vec) {
+		for (const auto& ifa : *ifa_vec) {
+			DatagramSocket::JoinMulticastGroup(sd, IP, ifa);
+		}
+	}
+	else {
+		DatagramSocket::JoinMulticastGroup(sd, IP);
+	}
+
+	while (status == 0) {
+		// Don't block - only proceed to Read() when data available
+		if ((timeout_ms>0) && (ts.Select(timeout_ms,{sd})<1) ) continue;
+
+		auto N = DatagramSocket::Read(sd, &msg_buf[0], msg_buf.size(), meta);
 		if (N<0) {
-			WARN("Listener::Read() returned %d", N);
+			WARN("DatagramSocket::Read() returned %d", N);
 			continue;
 		}
 
+		print_dns_msg(&msg_buf[0], N, &meta);
+	}
 
-		// Print some packet information
-
-		{
-			std::lock_guard<std::mutex> lock(print_mutex);
-
-			printf("\n***********************\n");
-			printf("Read %d bytes\n", (int)N);
-			printf("%s => ", SockUtil::ip_str(&src, b, sizeof(b)));
-			printf("%s : ", SockUtil::ip_str(&dst, b, sizeof(b)));
-			printf("delivered_on=%d\n", ifc_idx);
-
-			// Get DNS header information
-
-			size_t i = msg.read_header(msg_buf, 0, N);
-			if (i == 0) {
-				continue;
-			}
-
-			// Print header info
-
-			printf("{id %d : flags (%d)", msg.id, msg.flags);
-			for (const auto& it : DNS::Defs::HeaderFlags) {
-				if (msg.flags & it.first) printf(" %s", it.second.c_str());
-			}
-			printf("}\n");
-
-			// Print resource record sections
-
-			printf("Questions:\n");
-
-			for (auto rr_i=0; rr_i<msg.n_question; rr_i++) {
-				i = rr.read_header(msg_buf, i, N, tmp);
-				if (i == 0) {
-					printf("Problem parsing record.\n");
-					break;
-				}
-				print_dns_rr(rr, msg_buf, true);
-			}
-			if (i == 0) {
-				printf("Problem parsing section.\n");
-				continue;
-			}
-
-			const char* sections[] = {
-				"Answers", "Authority", "Additional"
-			};
-
-			int counts[] = {
-				msg.n_answer, msg.n_authority, msg.n_additional
-			};
-
-			for (int sec_i=0; sec_i<3; sec_i++) {
-				printf("%s:\n", sections[sec_i]);
-				for (auto rr_i=0; rr_i<counts[sec_i]; rr_i++) {
-					i = rr.read_header_and_body(msg_buf, i, N, tmp);
-					if (i==0) {
-						printf("Problem parsing record.\n");
-						break;
-					}
-
-					print_dns_rr(rr, msg_buf, false);
-				}
-				if (i == 0) {
-					printf("Problem parsing section.\n");
-					break;
-				}
-			}
-
-			printf("\n");
-		}
-	}	
+	close(sd);
 }
 
 int main(int argc, char **argv)
 {
-	using Listener = DatagramSocket;
-
 	Interfaces ifcs;
 
 	int timeout_ms = 100;
 	std::vector<ifaddrs *> ifaddrs4, ifaddrs6;
 
-	// Avoid warnings appearing out-of-order relative to normal output
+	// Avoid warnings/errors appearing out-of-order relative to normal output
 
 	setbuf(stdout, nullptr);
 	setbuf(stderr, nullptr);
@@ -264,7 +278,7 @@ int main(int argc, char **argv)
 				ifaddrs6.push_back(ifa);
 			}
 		}
-		// This is not recognised.
+		// This is not a recognised interface name or local IP address.
 		else
 		{
 			printf("'%s' is not an interface name or assigned address.\n", argv[i]);
@@ -288,7 +302,8 @@ int main(int argc, char **argv)
 		new_action.sa_handler = signal_handler;
 		new_action.sa_flags = 0;
 
-		// Allow signal to interrupt system routines like recvmsg
+		// Allow signal to interrupt system routines like recvmsg; we avoid
+		// needing this by using select with a timeout while reading messages.
 		//if (siginterrupt(signal_type,1) != 0 ) ERROR("siginterrupt()");			
 
 		// Install new handler
@@ -304,22 +319,7 @@ int main(int argc, char **argv)
 		auto IP = "224.0.0.251";
 
 		if (ifaddrs4.size()<1) return;
-
-		int sd = Listener::CreateAndBind(AF_INET, port);
-		if (sd < 0) {
-			ERROR("Creation/bind failed (%s : %d).\n", IP, port);
-		}
-
-		for (const auto& ifa : ifaddrs4) {
-			Listener::JoinMulticastGroup(sd, IP, ifa);			
-		}
-//		Listener::JoinMulticastGroup(sd, IP);
-
-		read_messages(sd, timeout_ms, gSignalStatus);
-
-		printf("thread4 loop ended.\n");
-
-		close(sd);
+		read_messages(AF_INET, port, IP, &ifaddrs4, timeout_ms, gSignalStatus);
 	});
 
 	// IPv6 mDNS listener thread
@@ -329,22 +329,7 @@ int main(int argc, char **argv)
 		auto IP = "ff02::fb";
 
 		if (ifaddrs6.size()<1) return;
-
-		int sd = Listener::CreateAndBind(AF_INET6, port);
-		if (sd < 0) {
-			ERROR("Creation/bind failed (%s : %d).\n", IP, port);
-		}
-
-		for (const auto& ifa : ifaddrs6) {
-			Listener::JoinMulticastGroup(sd, IP, ifa);			
-		}
-//		Listener::JoinMulticastGroup(sd, IP);
-
-		read_messages(sd, timeout_ms, gSignalStatus);
-
-		printf("thread6 loop ended.\n");
-
-		close(sd);
+		read_messages(AF_INET6, port, IP, &ifaddrs6, timeout_ms, gSignalStatus);
 	});
 
 	// Just wait for threads to exit.
