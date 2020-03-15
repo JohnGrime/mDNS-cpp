@@ -115,22 +115,12 @@ void print_dns_rr(const DNS::ResourceRecord& rr,const char* msg_buf, bool is_que
 }
 
 void print_dns_msg(
-	const char *msg_buf, int msg_buflen,
-	DatagramSocket::Meta* meta = nullptr)
+	const char *msg_buf, int msg_buflen)
 {
 	DNS::Message msg;
 	DNS::ResourceRecord rr;
 
-	char b[INET6_ADDRSTRLEN];
 	std::vector<std::string> tmp;
-
-	printf("\n***********************\n");
-	printf("Read %d bytes\n", (int)msg_buflen);
-	if (meta) {
-		printf("%s => ", SockUtil::ip_str(&meta->src, b, sizeof(b)));
-		printf("%s : ", SockUtil::ip_str(&meta->dst, b, sizeof(b)));
-		printf("delivered_on=%d\n", meta->ifc_idx);
-	}
 
 	// Get DNS header information
 
@@ -187,12 +177,13 @@ void read_messages(
 	const std::vector<ifaddrs *>* ifa_vec,
 	int timeout_ms,
 	volatile std::sig_atomic_t& status,
-	std::mutex* print_mutex = nullptr)
+	std::mutex& print_mutex)
 {
 	TimeoutSelect ts;
 	DatagramSocket::Meta meta;
 
 	std::vector<char> msg_buf(66000);
+	char ip_buf[INET6_ADDRSTRLEN];
 
 	if (!IP) return;
 	if (ifa_vec && ifa_vec->size()<1) return;
@@ -222,13 +213,17 @@ void read_messages(
 			continue;
 		}
 
-		// Avoids intermingled output
-		if (print_mutex) {
-			std::lock_guard<std::mutex> lock(*print_mutex);
-			print_dns_msg(&msg_buf[0], N, &meta);
-		}
-		else {
-			print_dns_msg(&msg_buf[0], N, &meta);
+		// Avoid intermingled output
+		{
+			std::lock_guard<std::mutex> lock(print_mutex);
+
+			printf("\n***********************\n");
+			printf("Read %d bytes\n", (int)N);
+			printf("%s => ", SockUtil::ip_str(&meta.src, ip_buf, sizeof(ip_buf)));
+			printf("%s : ", SockUtil::ip_str(&meta.dst, ip_buf, sizeof(ip_buf)));
+			printf("delivered_on=%d\n", meta.ifc_idx);
+
+			print_dns_msg(&msg_buf[0], N);
 		}
 	}
 
@@ -334,7 +329,7 @@ int main(int argc, char **argv)
 		auto IP = "224.0.0.251";
 
 		if (ifaddrs4.size()<1) return;
-		read_messages(AF_INET, port, IP, &ifaddrs4, timeout_ms, gSignalStatus, &print_mutex);
+		read_messages(AF_INET, port, IP, &ifaddrs4, timeout_ms, gSignalStatus, print_mutex);
 	});
 
 	// IPv6 mDNS listener thread
@@ -344,7 +339,7 @@ int main(int argc, char **argv)
 		auto IP = "ff02::fb";
 
 		if (ifaddrs6.size()<1) return;
-		read_messages(AF_INET6, port, IP, &ifaddrs6, timeout_ms, gSignalStatus, &print_mutex);
+		read_messages(AF_INET6, port, IP, &ifaddrs6, timeout_ms, gSignalStatus, print_mutex);
 	});
 
 	// Just wait for threads to exit.

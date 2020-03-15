@@ -161,7 +161,8 @@ struct Defs
 //
 struct Parse
 {
-	// Endian conversion for arbitrary integral data type
+	// Endian conversion for arbitrary integral data type. No 64-bit htonll()
+	// on Linux, so I just wrote a new one to cover all the cases.
 	template <typename T>
 	static T ntoh(const T& t)
 	{
