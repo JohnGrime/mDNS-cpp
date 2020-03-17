@@ -58,6 +58,18 @@ struct Interfaces
 		return if_nametoindex(name);
 	}
 
+	static bool IsLoopback(const ifaddrs * ifa)
+	{
+		if (ifa == nullptr) return false;
+		return (ifa->ifa_flags & IFF_LOOPBACK) ? true : false;
+	}
+
+	static bool IsMulticast(const ifaddrs * ifa)
+	{
+		if (ifa == nullptr) return false;
+		return (ifa->ifa_flags & IFF_MULTICAST) ? true : false;
+	}
+
 	Interfaces()
 	{
 		Refresh();
@@ -146,7 +158,7 @@ struct Interfaces
 
 		for (const auto ifa : ifc.addresses) {
 
-			printf("  %s\n", SockUtil::af_str(ifa->ifa_addr));
+			printf("  %s (%d)\n", SockUtil::af_str(ifa->ifa_addr), ifa->ifa_addr->sa_family);
 
 			printf("    ifa_flags: ");
 			for (auto &x : Interfaces::iff_flag_map) {

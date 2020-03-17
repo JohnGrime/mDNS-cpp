@@ -57,9 +57,41 @@ struct SockUtil
 		return (s->ss_family == AF_INET) || (s->ss_family == AF_INET6);
 	}
 
-	// Extract IPv4/6 address from general sockaddr
-	template <typename T> static ia4* inet4(T *s) { return (is_inet(s)) ? &((sa4 *)s)->sin_addr : nullptr; }
-	template <typename T> static ia6* inet6(T *s) { return (is_inet(s)) ? &((sa6 *)s)->sin6_addr : nullptr; }
+	// Extract IPv4/6 address from general sockaddr; nullptr check handled by is_inet()
+	template <typename T> static sa4* addr4(T* s) { return is_inet(s) ? (sa4 *)s : nullptr; }
+	template <typename T> static sa6* addr6(T* s) { return is_inet(s) ? (sa6 *)s : nullptr; }
+
+	// Extract IPv4/6 address from general sockaddr; nullptr check handled by is_inet()
+	template <typename T> static ia4* inet4(T* s) { return is_inet(s) ? &addr4(s)->sin_addr : nullptr; }
+	template <typename T> static ia6* inet6(T* s) { return is_inet(s) ? &addr6(s)->sin6_addr : nullptr; }
+
+	// Fill sockaddr structure for IPv4/IPv6
+	template <typename T> static bool fill4(T* s, const char *ip, int port)
+	{
+		if (s == nullptr) return false;
+
+		auto family = AF_INET;
+		auto a4 = (sa4 *)s; // s->family not yet set, so addr4(s) would return nullptr
+
+		a4->sin_family = family;
+		a4->sin_port = htons(port);
+		auto result = inet_pton(family, ip, &a4->sin_addr.s_addr);
+
+		return (result == 1) ? true : false;
+	}
+	template <typename T> static bool fill6(T* s, const char *ip, int port)
+	{
+		if (s == nullptr) return false;
+
+		auto family = AF_INET6;
+		auto a6 = (sa6 *)s; // s->family not yet set, so addr6(s) would return nullptr
+
+		a6->sin6_family = family;
+		a6->sin6_port = htons(port);
+		auto result = inet_pton(family, ip, &a6->sin6_addr);
+
+		return (result == 1) ? true : false;
+	}
 
 	// Extract IPv4/IPv6 family string from general sockaddr
 	template <typename T> static const char* af_str(T *s)
@@ -70,7 +102,7 @@ struct SockUtil
 	}
 
 	// MAC address (AF_PACKET family type)
-	template <typename T> static const char* mac_str(T *s, char *buf, size_t len)
+	template <typename T> static const char* mac_str(T* s, char *buf, size_t len)
 	{
 		const auto fmt = "%02x:%02x:%02x:%02x:%02x:%02x";
 
@@ -86,7 +118,7 @@ struct SockUtil
 	}
 
 	// Extract IPv4/IPv6 address string from general sockaddr
-	template <typename T> static const char* ip_str(T *s, char *buf, size_t len)
+	template <typename T> static const char* ip_str(T* s, char *buf, size_t len)
 	{
 		if (!is_inet(s)) return nullptr;
 
@@ -99,7 +131,7 @@ struct SockUtil
 	}
 
 	// debug
-	template <typename T> static void print(T *s)
+	template <typename T> static void print(T* s)
 	{
 		char buf[INET6_ADDRSTRLEN];
 		auto len = sizeof(buf);
@@ -109,7 +141,28 @@ struct SockUtil
 			return;
 		}
 
-		printf("[family=%s ip=%s]\n", af_str(s), ip_str(s,buf,len));
+		if (!is_inet(s)) {
+			printf("[family=%s (%d)]\n", af_str(s), ((ss *)s)->ss_family);
+		}
+		else {
+			if (((ss *)s)->ss_family == AF_INET ) {
+				auto a4 = addr4(s);
+				if (!a4) {
+					ERROR("Unable to extract IPv4 socket address from input pointer!");
+				}
+				auto port = ntohs(a4->sin_port);
+				printf("[family=%s ip=%s port=%d]\n", af_str(s), ip_str(s,buf,len), port);
+			}
+			else {
+				auto a6 = addr6(s);
+				if (!a6) {
+					ERROR("Unable to extract IPv6 socket address from input pointer!");
+				}
+				auto port = ntohs(a6->sin6_port);
+				printf("[family=%s ip=%s port=%d]\n", af_str(s), ip_str(s,buf,len), port);
+			}
+
+		}
 	}
 };
 

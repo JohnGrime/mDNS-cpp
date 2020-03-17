@@ -263,9 +263,8 @@ int main(int argc, char **argv)
 			for (const auto ifa : ifc->addresses) {
 				auto sa = ifa->ifa_addr;
 
-				if (!SockUtil::is_inet(sa)) {
-					continue;
-				}
+				if (!SockUtil::is_inet(sa))  continue;
+				if (!Interfaces::IsMulticast(ifa)) continue;
 
 				if (sa->sa_family == AF_INET) {
 					ifaddrs4.push_back(ifa);
@@ -278,6 +277,11 @@ int main(int argc, char **argv)
 		// Is this a valid IP address?
 		else if (auto ifc = ifcs.LookupByIP(argv[i], &ifa)) {
 			auto sa = ifa->ifa_addr;
+
+			if ( !(ifa->ifa_flags&IFF_MULTICAST) ) {
+				printf("Interface '%s' : flags & IFF_MULTICAST = 0; skipping\n", ifa->ifa_name);
+				continue;
+			}
 
 			if (sa->sa_family == AF_INET) {
 				printf("'%s' => IPv4 on %s (%d).\n", argv[i], ifc->name.c_str(), ifc->index);
@@ -341,6 +345,41 @@ int main(int argc, char **argv)
 		if (ifaddrs6.size()<1) return;
 		read_messages(AF_INET6, port, IP, &ifaddrs6, timeout_ms, gSignalStatus, print_mutex);
 	});
+
+	// Post ping packets?
+	{
+		struct sockaddr_storage ss;
+
+		// IPv4
+		for (const auto x: ifaddrs4) {
+			auto port = 5353;
+			auto IP = "224.0.0.251";
+
+			memset(&ss, 0, sizeof(ss));
+			if (!SockUtil::fill4(&ss, IP, port)) {
+				ERROR("init() : ipv4 addr %s port %d invalid", IP, port);
+			}
+
+			SockUtil::print(&ss);
+
+			// ... send ...
+		}
+
+		// IPv6
+		for (const auto x: ifaddrs6) {
+			auto port = 5353;
+			auto IP = "ff02::fb";
+
+			memset(&ss, 0, sizeof(ss));
+			if (!SockUtil::fill6(&ss, IP, port)) {
+				ERROR("init() : ipv6 addr %s port %d invalid", IP, port);
+			}
+
+			SockUtil::print(&ss);
+
+			// ... send ...
+		}
+	}
 
 	// Just wait for threads to exit.
 
