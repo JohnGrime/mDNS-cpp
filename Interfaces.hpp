@@ -137,7 +137,7 @@ struct Interfaces
 			for (const auto& ifa : interface.addresses) {
 				auto sa = ifa->ifa_addr;
 				if (!SockUtil::is_inet(sa)) continue;
-				if (!SockUtil::ip_str(sa,buf,len)) ERROR("str(%s)\n", IP);
+				if (!SockUtil::unpack(sa,buf,len)) ERROR("str(%s)\n", IP);
 				if (strcmp(IP,buf) == 0) {
 					if (ifa_ != nullptr) *ifa_ = ifa;
 					return &interface;
@@ -167,9 +167,9 @@ struct Interfaces
 			printf("\n");
 
 			if (SockUtil::is_inet(ifa->ifa_addr)) {
-				printf("    ifa_addr: %s\n", SockUtil::ip_str(ifa->ifa_addr,buf,len));
-				printf("    ifa_netmask: %s\n", SockUtil::ip_str(ifa->ifa_netmask,buf,len));
-				printf("    ifa_broadaddr: %s\n", SockUtil::ip_str(ifa->ifa_broadaddr,buf,len));
+				printf("    ifa_addr: %s\n", SockUtil::unpack(ifa->ifa_addr,buf,len));
+				printf("    ifa_netmask: %s\n", SockUtil::unpack(ifa->ifa_netmask,buf,len));
+				printf("    ifa_broadaddr: %s\n", SockUtil::unpack(ifa->ifa_broadaddr,buf,len));
 			}
 			else if (ifa->ifa_addr->sa_family == AF_PACKET) {
 				printf("    MAC: %s\n", SockUtil::mac_str(ifa->ifa_addr,buf,len));

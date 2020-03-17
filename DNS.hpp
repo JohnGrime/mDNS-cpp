@@ -183,22 +183,37 @@ struct Parse
 
 
 	template<typename T>
-	static size_t atom(const char *bytes, size_t i, size_t max_i, T& t, bool endian = true)
+	static size_t read(const char *bytes, size_t i, size_t max_i, T& t, bool endian = true)
 	{
 		if (!bytes) {
 			WARN("Null bytes pointer!");
 			return 0;
 		}
 
-		if (i>=max_i) {
-			WARN("Attempt to read past buffer (%d,%d)", (int)i, (int)max_i);
+		if ((i+sizeof(T))>=max_i) {
+			WARN("Attempt to read past buffer (%d+%d,%d)", (int)i, (int)sizeof(T), (int)max_i);
 			return 0;
 		}
 
-		if (!bytes || (i>=max_i)) return 0;
-
 		t = *((T*) &bytes[i]);
 		if (endian) t = ntoh(t);
+		return i+sizeof(T);
+	}
+
+	template<typename T>
+	static size_t write(const char *bytes, size_t i, size_t max_i, T& t, bool endian = true)
+	{
+		if (!bytes) {
+			WARN("Null bytes pointer!");
+			return 0;
+		}
+
+		if ((i+sizeof(T))>=max_i) {
+			WARN("Attempt to write past buffer (%d+%d,%d)", (int)i, (int)sizeof(T), (int)max_i);
+			return 0;
+		}
+
+		*((T*) &bytes[i]) = (endian) ? ntoh(t) : t;
 		return i+sizeof(T);
 	}
 
@@ -238,7 +253,7 @@ struct Parse
 			if (compression == 0) {
 				uint8_t lbl_len;
 
-				i = atom(bytes, i, max_i, lbl_len);
+				i = read(bytes, i, max_i, lbl_len);
 				if (lbl_len == 0) return i;
 
 				if (i+lbl_len > max_i) {
@@ -261,7 +276,7 @@ struct Parse
 
 				// Get new offset into packet data
 				auto old_i = i;
-				i = atom(bytes, i, max_i, new_i);
+				i = read(bytes, i, max_i, new_i);
 				new_i = new_i & idx_bits;
 
 				// Check for infinite loop
@@ -327,12 +342,12 @@ struct ResourceRecord
 			name += tmp[ti] + ".";
 		}
 
-		i = Parse::atom(bytes, i, max_i, type);
+		i = Parse::read(bytes, i, max_i, type);
 		if (i==0) {
 			return 0;
 		}
 
-		i = Parse::atom(bytes, i, max_i, clss);
+		i = Parse::read(bytes, i, max_i, clss);
 		if (i==0) {
 			return 0;
 		}
@@ -347,12 +362,12 @@ struct ResourceRecord
 			return 0;
 		}
 
-		i = Parse::atom(bytes, i, max_i, TTL);
+		i = Parse::read(bytes, i, max_i, TTL);
 		if (i==0) {
 			return 0;
 		}
 
-		i = Parse::atom(bytes, i, max_i, rd_len);
+		i = Parse::read(bytes, i, max_i, rd_len);
 		if (i==0) {
 			return 0;
 		}
@@ -394,32 +409,72 @@ struct Message
 			return 0;
 		}
 
-		i = Parse::atom(bytes, i, max_i, id);
+		i = Parse::read(bytes, i, max_i, id);
 		if (i==0) {
 			return 0;
 		}
 
-		i = Parse::atom(bytes, i, max_i, flags);
+		i = Parse::read(bytes, i, max_i, flags);
 		if (i==0) {
 			return 0;
 		}
 
-		i = Parse::atom(bytes, i, max_i, n_question);
+		i = Parse::read(bytes, i, max_i, n_question);
 		if (i==0) {
 			return 0;
 		}
 
-		i = Parse::atom(bytes, i, max_i, n_answer);
+		i = Parse::read(bytes, i, max_i, n_answer);
 		if (i==0) {
 			return 0;
 		}
 
-		i = Parse::atom(bytes, i, max_i, n_authority);
+		i = Parse::read(bytes, i, max_i, n_authority);
 		if (i==0) {
 			return 0;
 		}
 
-		i = Parse::atom(bytes, i, max_i, n_additional);
+		i = Parse::read(bytes, i, max_i, n_additional);
+		if (i==0) {
+			return 0;
+		}
+
+		return i;
+	}
+
+	size_t write_header(const char* bytes, size_t i, size_t max_i)
+	{
+		if (!bytes) {
+			WARN("Null bytes pointer!");
+			return 0;
+		}
+
+		i = Parse::read(bytes, i, max_i, id);
+		if (i==0) {
+			return 0;
+		}
+
+		i = Parse::read(bytes, i, max_i, flags);
+		if (i==0) {
+			return 0;
+		}
+
+		i = Parse::read(bytes, i, max_i, n_question);
+		if (i==0) {
+			return 0;
+		}
+
+		i = Parse::read(bytes, i, max_i, n_answer);
+		if (i==0) {
+			return 0;
+		}
+
+		i = Parse::read(bytes, i, max_i, n_authority);
+		if (i==0) {
+			return 0;
+		}
+
+		i = Parse::read(bytes, i, max_i, n_additional);
 		if (i==0) {
 			return 0;
 		}

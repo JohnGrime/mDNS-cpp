@@ -95,9 +95,9 @@ void print_dns_rr(const DNS::ResourceRecord& rr,const char* msg_buf, bool is_que
 		{
 			uint16_t priority, weight, port;
 
-			i = DNS::Parse::atom(msg_buf, i, max_i, priority);
-			i = DNS::Parse::atom(msg_buf, i, max_i, weight);
-			i = DNS::Parse::atom(msg_buf, i, max_i, port);
+			i = DNS::Parse::read(msg_buf, i, max_i, priority);
+			i = DNS::Parse::read(msg_buf, i, max_i, weight);
+			i = DNS::Parse::read(msg_buf, i, max_i, port);
 
 			DNS::Parse::labels(msg_buf, i, max_i, true, true, tmp);
 
@@ -219,8 +219,8 @@ void read_messages(
 
 			printf("\n***********************\n");
 			printf("Read %d bytes\n", (int)N);
-			printf("%s => ", SockUtil::ip_str(&meta.src, ip_buf, sizeof(ip_buf)));
-			printf("%s : ", SockUtil::ip_str(&meta.dst, ip_buf, sizeof(ip_buf)));
+			printf("%s => ", SockUtil::unpack(&meta.src, ip_buf, sizeof(ip_buf)));
+			printf("%s : ", SockUtil::unpack(&meta.dst, ip_buf, sizeof(ip_buf)));
 			printf("delivered_on=%d\n", meta.ifc_idx);
 
 			print_dns_msg(&msg_buf[0], N);
@@ -348,7 +348,17 @@ int main(int argc, char **argv)
 
 	// Post ping packets?
 	{
+		char buf[INET6_ADDRSTRLEN];
+
 		struct sockaddr_storage ss;
+		struct DNS::Message msg;
+
+		msg.id = 0;
+		msg.flags = DNS::Defs::QUERY;
+		msg.n_question = 1;
+		msg.n_answer = 0;
+		msg.n_authority = 0;
+		msg.n_additional = 0;
 
 		// IPv4
 		for (const auto x: ifaddrs4) {
@@ -356,11 +366,14 @@ int main(int argc, char **argv)
 			auto IP = "224.0.0.251";
 
 			memset(&ss, 0, sizeof(ss));
-			if (!SockUtil::fill4(&ss, IP, port)) {
+			if (!SockUtil::pack(&ss, AF_INET, IP, port)) {
 				ERROR("init() : ipv4 addr %s port %d invalid", IP, port);
 			}
 
 			SockUtil::print(&ss);
+
+			SockUtil::unpack(&ss, buf, sizeof(buf), &port);
+			printf("{%s (%d) : %s : %d}\n", SockUtil::af_str(&ss), ss.ss_family, buf, port);
 
 			// ... send ...
 		}
@@ -371,12 +384,14 @@ int main(int argc, char **argv)
 			auto IP = "ff02::fb";
 
 			memset(&ss, 0, sizeof(ss));
-			if (!SockUtil::fill6(&ss, IP, port)) {
+			if (!SockUtil::pack(&ss, AF_INET6, IP, port)) {
 				ERROR("init() : ipv6 addr %s port %d invalid", IP, port);
 			}
 
 			SockUtil::print(&ss);
 
+			SockUtil::unpack(&ss, buf, sizeof(buf), &port);
+			printf("{%s (%d) : %s : %d}\n", SockUtil::af_str(&ss), ss.ss_family, buf, port);
 			// ... send ...
 		}
 	}
