@@ -134,7 +134,12 @@ struct DatagramSocket
 		// Bind socket
 
 		if (bind(s, (struct sockaddr *)&ss, bind_len) != 0) {
-			ERROR("bind(%s,%d)", fstr, port);
+			char b[INET6_ADDRSTRLEN];
+			int p;
+
+			SockUtil::unpack(&ss,b,sizeof(b),&p);
+
+			ERROR("bind(%s,%s,%d)", fstr, b, p);
 		}
 
 		return s;

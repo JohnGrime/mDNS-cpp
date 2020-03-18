@@ -4,6 +4,8 @@
 
 #include "defs.hpp" // should come before any inet headers etc
 
+#include <string.h> // strtok_r()
+
 #include <map>
 #include <string>
 #include <vector>
@@ -190,7 +192,7 @@ struct Parse
 			return 0;
 		}
 
-		if ((i+sizeof(T))>=max_i) {
+		if ((i+sizeof(T))>max_i) {
 			WARN("Attempt to read past buffer (%d+%d,%d)", (int)i, (int)sizeof(T), (int)max_i);
 			return 0;
 		}
@@ -208,13 +210,23 @@ struct Parse
 			return 0;
 		}
 
-		if ((i+sizeof(T))>=max_i) {
+		if ((i+sizeof(T))>max_i) {
 			WARN("Attempt to write past buffer (%d+%d,%d)", (int)i, (int)sizeof(T), (int)max_i);
 			return 0;
 		}
 
 		*((T*) &bytes[i]) = (endian) ? ntoh(t) : t;
 		return i+sizeof(T);
+	}
+
+	template<typename T>
+	static void append(std::vector<char>& bytes, T t, bool endian = true)
+	{
+		T t_ = (endian) ? ntoh(t) : t;
+
+		for (size_t i=0, N=sizeof(T); i<N; i++) {
+			bytes.push_back( ((char *)&t_)[i] );
+		}
 	}
 
 	// Parse byte sequence of [N][b1,b2,...bN] into labels; RFC1035:4.1.4
@@ -442,44 +454,66 @@ struct Message
 		return i;
 	}
 
-	size_t write_header(const char* bytes, size_t i, size_t max_i)
+	static void make_request(
+		std::vector<char>& msg_buf,
+		const std::initializer_list< std::pair<std::string,uint16_t> >& reqs)
 	{
-		if (!bytes) {
-			WARN("Null bytes pointer!");
-			return 0;
+		const char* delim = ".";
+		std::string str;
+		char* save_ptr;
+		uint16_t u16;
+
+		// Note: sizeof(Message) likely padded! Don't use to e.g. msg_buf.resize()!
+
+		msg_buf.clear();
+
+		// Write message header
+		{
+			Message msg;
+
+			msg.id = 0;
+			msg.flags = 0;
+
+			msg.n_question = reqs.size();
+			msg.n_answer = 0;
+			msg.n_authority = 0;
+			msg.n_additional = 0;
+
+			// Use of Message ensures correct sized types inferred in Parse::append()
+			Parse::append(msg_buf, msg.id);
+			Parse::append(msg_buf, msg.flags);
+			Parse::append(msg_buf, msg.n_question);
+			Parse::append(msg_buf, msg.n_answer);
+			Parse::append(msg_buf, msg.n_authority);
+			Parse::append(msg_buf, msg.n_additional);
 		}
 
-		i = Parse::read(bytes, i, max_i, id);
-		if (i==0) {
-			return 0;
-		}
+		// Write questions: Resource Records, so [{labels,type,class}, ...]
 
-		i = Parse::read(bytes, i, max_i, flags);
-		if (i==0) {
-			return 0;
-		}
+		for (const auto [x,rr_type]: reqs) {
+			// get a modifiable copy of x
+			str = x;
+			// Split, write substrings as length byte followed by substring
+			auto tok = strtok_r(&str[0], delim, &save_ptr);
+			while (tok != nullptr) {
+				auto len = strlen(tok);
+				Parse::append(msg_buf, (unsigned char)len);
+				for (size_t j=0; j<len; j++) {
+					Parse::append(msg_buf, tok[j]);
+				}
+				tok = strtok_r(nullptr, delim, &save_ptr);
+			}
+			// Terminate label - zero-length string.
+			Parse::append(msg_buf, (unsigned char)0);
 
-		i = Parse::read(bytes, i, max_i, n_question);
-		if (i==0) {
-			return 0;
-		}
+			// RR type
+			u16 = rr_type;
+			Parse::append(msg_buf, u16);
 
-		i = Parse::read(bytes, i, max_i, n_answer);
-		if (i==0) {
-			return 0;
+			// RR class
+			u16 = Defs::IN;
+			Parse::append(msg_buf, u16);
 		}
-
-		i = Parse::read(bytes, i, max_i, n_authority);
-		if (i==0) {
-			return 0;
-		}
-
-		i = Parse::read(bytes, i, max_i, n_additional);
-		if (i==0) {
-			return 0;
-		}
-
-		return i;
 	}
 };
 

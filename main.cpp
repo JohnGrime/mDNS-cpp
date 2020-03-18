@@ -135,6 +135,10 @@ void print_dns_msg(
 	for (const auto& it : DNS::Defs::HeaderFlags) {
 		if (msg.flags & it.first) printf(" %s", it.second.c_str());
 	}
+	printf(" n_question %d", msg.n_question);
+	printf(" n_answer %d", msg.n_answer);
+	printf(" n_authority %d", msg.n_authority);
+	printf(" n_additional %d", msg.n_additional);
 	printf("}\n");
 
 	// Print resource record sections
@@ -346,53 +350,117 @@ int main(int argc, char **argv)
 		read_messages(AF_INET6, port, IP, &ifaddrs6, timeout_ms, gSignalStatus, print_mutex);
 	});
 
+	sleep(1);
+
 	// Post ping packets?
 	{
-		char buf[INET6_ADDRSTRLEN];
+		std::vector<char> msg_buf;
+		struct sockaddr_storage mcast_ss, local_ss;
 
-		struct sockaddr_storage ss;
-		struct DNS::Message msg;
+		DNS::Message::make_request(msg_buf, {
+			{"blah.x.y", DNS::Defs::PTR},
+			{"wibble.blerp", DNS::Defs::TXT},
+		});
 
-		msg.id = 0;
-		msg.flags = DNS::Defs::QUERY;
-		msg.n_question = 1;
-		msg.n_answer = 0;
-		msg.n_authority = 0;
-		msg.n_additional = 0;
+		//print_dns_msg(&msg_buf[0], msg_buf.size());
 
 		// IPv4
 		for (const auto x: ifaddrs4) {
 			auto port = 5353;
 			auto IP = "224.0.0.251";
+			auto sa = (SockUtil::sa4 *) &local_ss;
 
-			memset(&ss, 0, sizeof(ss));
-			if (!SockUtil::pack(&ss, AF_INET, IP, port)) {
+			if (!SockUtil::pack(&mcast_ss, AF_INET, IP, port)) {
 				ERROR("init() : ipv4 addr %s port %d invalid", IP, port);
 			}
 
-			SockUtil::print(&ss);
+			{
+				std::lock_guard<std::mutex> lock(print_mutex);
+				SockUtil::print(&mcast_ss);
+				SockUtil::print(x->ifa_addr);
+			}
 
-			SockUtil::unpack(&ss, buf, sizeof(buf), &port);
-			printf("{%s (%d) : %s : %d}\n", SockUtil::af_str(&ss), ss.ss_family, buf, port);
+			int sd = socket(PF_INET, SOCK_DGRAM, 0);
+			if (sd < 0) {
+				ERROR("Socket creation failed");
+			}
 
-			// ... send ...
+			memcpy(sa, x->ifa_addr, sizeof(*sa));
+			sa->sin_port = htons(0);
+
+			if (bind(sd, (sockaddr *)sa, sizeof(*sa)) != 0) {
+				ERROR("bind(%s,%d)", IP, port);
+			}
+
+			{
+				std::lock_guard<std::mutex> lock(print_mutex);
+				SockUtil::print(sa);
+			}
+
+			// Note - size of sockaddr can't be sizeof(sockaddr_storage) or call fails.
+        	auto result = sendto(
+				sd,
+				&msg_buf[0], msg_buf.size(),
+				0,
+				(sockaddr *)&mcast_ss, sizeof(sockaddr_in));
+			
+			if (result<0) {
+				ERROR("Failed sendto() call", result);
+			}
+
+			close(sd);
 		}
 
 		// IPv6
 		for (const auto x: ifaddrs6) {
 			auto port = 5353;
 			auto IP = "ff02::fb";
+			auto sa = (SockUtil::sa6 *) &local_ss;
 
-			memset(&ss, 0, sizeof(ss));
-			if (!SockUtil::pack(&ss, AF_INET6, IP, port)) {
+			if (!SockUtil::pack(&mcast_ss, AF_INET6, IP, port)) {
 				ERROR("init() : ipv6 addr %s port %d invalid", IP, port);
 			}
 
-			SockUtil::print(&ss);
+			{
+				std::lock_guard<std::mutex> lock(print_mutex);
+				SockUtil::print(&mcast_ss);
+				SockUtil::print(x->ifa_addr);
+			}
 
-			SockUtil::unpack(&ss, buf, sizeof(buf), &port);
-			printf("{%s (%d) : %s : %d}\n", SockUtil::af_str(&ss), ss.ss_family, buf, port);
-			// ... send ...
+			int sd = socket(PF_INET6, SOCK_DGRAM, 0);
+			if (sd < 0) {
+				ERROR("Socket creation failed");
+			}
+
+			// https://docs.oracle.com/cd/E19455-01/806-1017/auto1/index.html
+			// https://stackoverflow.com/questions/1264948/link-scope-ipv6-multicast-packets-suddenly-not-routable-on-a-macbook-pro
+			int idx = Interfaces::GetIndex(x->ifa_name);
+			setsockopt(sd, IPPROTO_IPV6, IPV6_MULTICAST_IF, &idx, sizeof(idx));
+
+			memcpy(sa, x->ifa_addr, sizeof(*sa));
+			sa->sin6_port = htons(0);
+
+			if (bind(sd, (sockaddr *)sa, sizeof(*sa)) != 0) {
+				ERROR("bind(%s,%d)", IP, port);
+			}
+
+			{
+				std::lock_guard<std::mutex> lock(print_mutex);
+				SockUtil::print(sa);
+			}
+
+			// Note - size of sockaddr can't be sizeof(sockaddr_storage) or call fails.
+        	auto result = sendto(
+				sd,
+				&msg_buf[0], msg_buf.size(),
+				0,
+				(sockaddr *)&mcast_ss, sizeof(sockaddr_in6));
+			
+			if (result<0) {
+				ERROR("Failed sendto() call", result);
+			}
+
+			close(sd);
 		}
 	}
 

@@ -68,6 +68,8 @@ struct SockUtil
 		int result = -1;
 		if (!s) return false;
 
+		memset(s, 0, sizeof(*s));
+
 		switch (family) {
 			case AF_INET:
 			{
