@@ -1,3 +1,7 @@
+/*
+	Author: John Grime
+*/
+
 #include "mDNS.hpp" // should come before any inet headers etc
 
 #include <unistd.h>
@@ -51,17 +55,20 @@ void signal_handler(int signal)
 
 // Debug print routines
 
-void print_dns_rr(const DNS::ResourceRecord& rr,const char* msg_buf, bool is_question)
+void print_dns_rr(const DNS::ResourceRecord& rr, const char* msg_buf, bool is_question)
 {
 	using Defs = DNS::Defs;
 
 	char b[INET6_ADDRSTRLEN];
 	std::vector<std::string> tmp;
 
-	printf("  {name=%s, type=%s (%d), class=%s (%d)} {TTL=%d rd_len=%d}",
+	printf("  {name=%s, type=%s (%d), class=%s %s(%d)} {TTL=%d rd_len=%d}",
 		rr.name.c_str(),
-		Defs::RRType(rr.type), rr.type,
-		Defs::Class(rr.clss), rr.clss,
+		Defs::RRType(rr.type),
+		rr.type,
+		Defs::Class(rr.clss & ~Defs::CACHE_FLUSH_BIT),
+		(rr.clss&Defs::CACHE_FLUSH_BIT) ? "[FLUSH_CACHE] " : "",
+		rr.clss,
 		rr.TTL, rr.rd_len );
 
 	if (is_question) {
@@ -227,6 +234,9 @@ void read_messages(
 			printf("%s : ", SockUtil::unpack(&meta.dst, ip_buf, sizeof(ip_buf)));
 			printf("delivered_on=%d\n", meta.ifc_idx);
 
+			SockUtil::print(&meta.src);
+			SockUtil::print(&meta.dst);
+
 			print_dns_msg(&msg_buf[0], N);
 		}
 	}
@@ -358,8 +368,9 @@ int main(int argc, char **argv)
 		struct sockaddr_storage mcast_ss, local_ss;
 
 		DNS::Message::make_request(msg_buf, {
-			{"blah.x.y", DNS::Defs::PTR},
-			{"wibble.blerp", DNS::Defs::TXT},
+//			{"blah.x.y", DNS::Defs::PTR},
+//			{"wibble.blerp", DNS::Defs::TXT},
+			{"_services._dns-sd._udp.local", DNS::Defs::PTR},
 		});
 
 		//print_dns_msg(&msg_buf[0], msg_buf.size());
@@ -417,16 +428,6 @@ int main(int argc, char **argv)
 			auto IP = "ff02::fb";
 			auto sa = (SockUtil::sa6 *) &local_ss;
 
-			if (!SockUtil::pack(&mcast_ss, AF_INET6, IP, port)) {
-				ERROR("init() : ipv6 addr %s port %d invalid", IP, port);
-			}
-
-			{
-				std::lock_guard<std::mutex> lock(print_mutex);
-				SockUtil::print(&mcast_ss);
-				SockUtil::print(x->ifa_addr);
-			}
-
 			int sd = socket(PF_INET6, SOCK_DGRAM, 0);
 			if (sd < 0) {
 				ERROR("Socket creation failed");
@@ -447,6 +448,16 @@ int main(int argc, char **argv)
 			{
 				std::lock_guard<std::mutex> lock(print_mutex);
 				SockUtil::print(sa);
+			}
+
+			if (!SockUtil::pack(&mcast_ss, AF_INET6, IP, port)) {
+				ERROR("init() : ipv6 addr %s port %d invalid", IP, port);
+			}
+
+			{
+				std::lock_guard<std::mutex> lock(print_mutex);
+				SockUtil::print(&mcast_ss);
+				SockUtil::print(x->ifa_addr);
 			}
 
 			// Note - size of sockaddr can't be sizeof(sockaddr_storage) or call fails.

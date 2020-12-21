@@ -1,3 +1,7 @@
+/*
+	Author: John Grime
+*/
+
 #if !defined(MDNS_DATAGRAMSOCKET)
 
 #define MDNS_DATAGRAMSOCKET

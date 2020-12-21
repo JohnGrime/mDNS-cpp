@@ -1,3 +1,7 @@
+/*
+	Author: John Grime
+*/
+
 #if !defined(MDNS_INTERFACES)
 
 #define MDNS_INTERFACES

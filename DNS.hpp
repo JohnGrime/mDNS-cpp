@@ -1,3 +1,7 @@
+/*
+	Author: John Grime
+*/
+
 #if !defined(MDNS_DNS)
 
 #define MDNS_DNS
@@ -79,7 +83,9 @@ struct Defs
 	static constexpr uint16_t ANY   = 255;
 
 	// Classes, "no obsolete" ;) RFC1035:3.2.4
+	static constexpr uint16_t CACHE_FLUSH_BIT = 1 << 15;  // 0b1000000000000000
 	static constexpr uint16_t IN = 1;
+
 
 	#define _(txt) {txt, #txt}
 		inline static const NameMap<uint16_t> HeaderFlags = {
@@ -463,7 +469,7 @@ struct Message
 		char* save_ptr;
 		uint16_t u16;
 
-		// Note: sizeof(Message) likely padded! Don't use to e.g. msg_buf.resize()!
+		// Note: sizeof(Message) may be padded! Don't use to e.g. msg_buf.resize()!
 
 		msg_buf.clear();
 
@@ -479,7 +485,7 @@ struct Message
 			msg.n_authority = 0;
 			msg.n_additional = 0;
 
-			// Use of Message ensures correct sized types inferred in Parse::append()
+			// Use Message members to ensure Parse::append() infers right types
 			Parse::append(msg_buf, msg.id);
 			Parse::append(msg_buf, msg.flags);
 			Parse::append(msg_buf, msg.n_question);
@@ -490,9 +496,7 @@ struct Message
 
 		// Write questions: Resource Records, so [{labels,type,class}, ...]
 
-		for (const auto [x,rr_type]: reqs) {
-			// get a modifiable copy of x
-			str = x;
+		for (auto [str,rr_type]: reqs) {
 			// Split, write substrings as length byte followed by substring
 			auto tok = strtok_r(&str[0], delim, &save_ptr);
 			while (tok != nullptr) {
@@ -503,7 +507,7 @@ struct Message
 				}
 				tok = strtok_r(nullptr, delim, &save_ptr);
 			}
-			// Terminate label - zero-length string.
+			// Terminate labels with zero-length string.
 			Parse::append(msg_buf, (unsigned char)0);
 
 			// RR type
